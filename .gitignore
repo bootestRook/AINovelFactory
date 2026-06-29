@@ -6,3 +6,14 @@ dist/
 !.env.example
 *.log
 tsconfig.tsbuildinfo
+
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+.idea/
+*.iml
+*.sqlite
