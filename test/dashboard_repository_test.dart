@@ -76,6 +76,48 @@ void main() {
     expect(data.novels.single.title, '龙族I-火之晨曦');
   });
 
+  test('importNovelFile splits strong Chinese section headings', () async {
+    final dir = await Directory.systemTemp.createTemp('ainovel_split_import_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final file = File('${dir.path}${Platform.pathSeparator}龙族I-火之晨曦.txt')
+      ..writeAsStringSync('简介\n第一幕 卡塞尔之门\n正文一\n第二幕 神秘学院\n正文二\n尾声\n正文三');
+
+    final novelId = await repository.importNovelFile(file.path);
+    final projectId =
+        await repository.createBookDeconstructionProject(novelId: novelId);
+    await repository.recordBookDeconstructionNodeOutput(
+      projectId: projectId,
+      node: bookDeconstructionWorkflowNodes.firstWhere(
+        (node) => node.id == 'book_chapter_content',
+      ),
+      content: await repository.buildBookDeconstructionNodeOutput(
+        projectId: projectId,
+        node: bookDeconstructionWorkflowNodes.firstWhere(
+          (node) => node.id == 'book_chapter_content',
+        ),
+      ),
+    );
+
+    final exportPath =
+        await repository.exportBookDeconstructionProjectFiles(projectId);
+    final index = File(
+      '$exportPath${Platform.pathSeparator}source${Platform.pathSeparator}chapters${Platform.pathSeparator}index.json',
+    ).readAsStringSync();
+
+    expect(index, contains('第一幕 卡塞尔之门'));
+    expect(index, contains('第二幕 神秘学院'));
+    expect(index, contains('尾声'));
+    expect(
+      File('$exportPath${Platform.pathSeparator}report.md').existsSync(),
+      isTrue,
+    );
+  });
+
   test(
       'backupToDirectory copies and restoreFromBackup restores sqlite database',
       () async {
@@ -207,6 +249,72 @@ void main() {
     await repository.deleteBookDeconstructionProject(projectId);
 
     expect(await repository.loadBookDeconstructionProjects(), isEmpty);
+  });
+
+  test('book deconstruction prompt keeps chapter text beyond 900 characters',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('ainovel_prompt_cap_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final longChapter = 'A' * 1200;
+    final novelId = await repository.importNovelFile(
+      (File('${dir.path}${Platform.pathSeparator}source.txt')
+            ..writeAsStringSync(longChapter))
+          .path,
+    );
+    final projectId =
+        await repository.createBookDeconstructionProject(novelId: novelId);
+    final prompt = await repository.buildBookDeconstructionAgentPrompt(
+      projectId: projectId,
+      node: bookDeconstructionWorkflowNodes.firstWhere(
+        (node) => node.id == 'book_chapter_content',
+      ),
+    );
+
+    expect(prompt, contains('A' * 1200));
+  });
+
+  test('book deconstruction project reset clears old run outputs', () async {
+    final dir = await Directory.systemTemp.createTemp('ainovel_book_reset_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.importNovelFile(
+      (File('${dir.path}${Platform.pathSeparator}source.txt')
+            ..writeAsStringSync('第一章 开始\n正文'))
+          .path,
+    );
+    final projectId =
+        await repository.createBookDeconstructionProject(novelId: novelId);
+    await repository.recordBookDeconstructionNodeOutput(
+      projectId: projectId,
+      node: bookDeconstructionWorkflowNodes.first,
+      content: '{"old":true}',
+    );
+    await repository.updateBookDeconstructionNodeStatus(
+      projectId: projectId,
+      nodeId: bookDeconstructionWorkflowNodes.first.id,
+      status: BookDeconstructionNodeStatus.passed,
+    );
+    await repository.setBookDeconstructionProjectStatus(
+      projectId: projectId,
+      status: BookDeconstructionProjectStatus.completed,
+    );
+
+    await repository.resetBookDeconstructionProject(projectId);
+
+    final project = (await repository.loadBookDeconstructionProjects()).single;
+    expect(project.status, BookDeconstructionProjectStatus.draft);
+    expect(project.nodeStatuses, isEmpty);
+    expect(project.progress, 0);
+    expect(project.characterCount, 0);
   });
 }
 

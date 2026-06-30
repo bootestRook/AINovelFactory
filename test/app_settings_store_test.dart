@@ -13,6 +13,7 @@ void main() {
     );
 
     const settings = AppAiSettings(
+      bookDeconstructionConcurrency: 5,
       providers: [
         AppAiProviderSettings(
           id: 'provider-a',
@@ -35,5 +36,16 @@ void main() {
     expect(loaded.providers.single.baseUrl, 'https://api.example.com/v1');
     expect(loaded.providers.single.selectedModel, 'model-a');
     expect(loaded.providers.single.availableModels, ['model-a', 'model-b']);
+    expect(loaded.bookDeconstructionConcurrency, 5);
+  });
+
+  test('AppAiSettings defaults book deconstruction concurrency to 3', () {
+    expect(const AppAiSettings().bookDeconstructionConcurrency, 3);
+    expect(
+      AppAiSettings.fromJson(const {
+        'bookDeconstructionConcurrency': 99,
+      }).bookDeconstructionConcurrency,
+      8,
+    );
   });
 }

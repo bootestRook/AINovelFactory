@@ -100,9 +100,11 @@ class AppAiSettings {
     this.providers = const [
       AppAiProviderSettings(id: 'provider-1'),
     ],
+    this.bookDeconstructionConcurrency = 3,
   });
 
   final List<AppAiProviderSettings> providers;
+  final int bookDeconstructionConcurrency;
 
   List<String> get activeModels {
     final seen = <String>{};
@@ -124,9 +126,13 @@ class AppAiSettings {
 
   AppAiSettings copyWith({
     List<AppAiProviderSettings>? providers,
+    int? bookDeconstructionConcurrency,
   }) {
     return AppAiSettings(
       providers: providers ?? this.providers,
+      bookDeconstructionConcurrency: bookDeconstructionConcurrency == null
+          ? this.bookDeconstructionConcurrency
+          : _normalizeConcurrency(bookDeconstructionConcurrency),
     );
   }
 
@@ -167,10 +173,12 @@ class AppAiSettings {
   Map<String, Object?> toJson() {
     return {
       'providers': [for (final provider in providers) provider.toJson()],
+      'bookDeconstructionConcurrency': bookDeconstructionConcurrency,
     };
   }
 
   factory AppAiSettings.fromJson(Map<String, Object?> json) {
+    final concurrency = _readConcurrency(json['bookDeconstructionConcurrency']);
     final rawProviders = json['providers'];
     if (rawProviders is List) {
       final providers = rawProviders
@@ -180,7 +188,10 @@ class AppAiSettings {
               ))
           .toList(growable: false);
       if (providers.isNotEmpty) {
-        return AppAiSettings(providers: List.unmodifiable(providers));
+        return AppAiSettings(
+          providers: List.unmodifiable(providers),
+          bookDeconstructionConcurrency: concurrency,
+        );
       }
     }
 
@@ -199,12 +210,28 @@ class AppAiSettings {
             availableModels: legacyModels,
           ),
         ],
+        bookDeconstructionConcurrency: concurrency,
       );
     }
 
-    return const AppAiSettings();
+    return AppAiSettings(bookDeconstructionConcurrency: concurrency);
   }
 }
+
+int _readConcurrency(Object? value) {
+  if (value is int) {
+    return _normalizeConcurrency(value);
+  }
+  if (value is num) {
+    return _normalizeConcurrency(value.round());
+  }
+  if (value is String) {
+    return _normalizeConcurrency(int.tryParse(value) ?? 3);
+  }
+  return 3;
+}
+
+int _normalizeConcurrency(int value) => value.clamp(1, 8).toInt();
 
 List<String> _stringList(Object? value) {
   if (value is! List) {

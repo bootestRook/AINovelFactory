@@ -2197,6 +2197,38 @@ class _AiProviderSettingsPageState extends State<_AiProviderSettingsPage> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                _ControlRow(
+                  title: _editorText(context, '拆书并发上限', 'Book Concurrency'),
+                  description: _editorText(
+                    context,
+                    '同时运行的拆书 Agent 数量，默认 3；过高可能触发供应商限流。',
+                    'Number of book agents running at once. Default is 3; higher values may hit provider rate limits.',
+                  ),
+                  controlWidth: 180,
+                  control: AppSelectField<int>(
+                    label: 'Book Concurrency',
+                    value: widget.settings.bookDeconstructionConcurrency,
+                    hint: '3',
+                    options: [
+                      for (var value = 1; value <= 8; value++)
+                        AppSelectOption(
+                          value: value,
+                          label: value.toString(),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) {
+                        return;
+                      }
+                      widget.onChanged(
+                        widget.settings.copyWith(
+                          bookDeconstructionConcurrency: value,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
                 _AiProviderCard(
                   key: ValueKey('ai-provider-card-${selectedProvider.id}'),
                   provider: selectedProvider,

@@ -305,6 +305,10 @@ void main() {
     await tester.tap(find.text('AI Providers').first);
     await tester.pumpAndSettle();
 
+    expect(find.text('Book Concurrency'), findsOneWidget);
+    expect(find.byKey(const ValueKey('select-field-Book Concurrency')),
+        findsOneWidget);
+
     await tester.enterText(
       find.byKey(const ValueKey('ai-api-key-field-provider-1')),
       'test-key',

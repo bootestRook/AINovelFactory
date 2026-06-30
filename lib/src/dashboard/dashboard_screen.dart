@@ -152,6 +152,8 @@ class BookDeconstructionScreen extends StatelessWidget {
     this.onCreateProject,
     this.onStartOrPause,
     this.onSelectProject,
+    this.onOpenProjectFolder,
+    this.onOpenProjectReport,
     this.onDeleteProject,
   });
 
@@ -165,6 +167,8 @@ class BookDeconstructionScreen extends StatelessWidget {
   final VoidCallback? onCreateProject;
   final VoidCallback? onStartOrPause;
   final ValueChanged<int>? onSelectProject;
+  final ValueChanged<int>? onOpenProjectFolder;
+  final ValueChanged<int>? onOpenProjectReport;
   final ValueChanged<int>? onDeleteProject;
 
   @override
@@ -261,6 +265,8 @@ class BookDeconstructionScreen extends StatelessWidget {
                           onImportNovel: onImportNovel,
                           onCreateProject: onCreateProject,
                           onSelectProject: onSelectProject,
+                          onOpenProjectFolder: onOpenProjectFolder,
+                          onOpenProjectReport: onOpenProjectReport,
                           onDeleteProject: onDeleteProject,
                         ),
                       ],
@@ -1118,6 +1124,8 @@ class _BookBreakdownProjectsSection extends StatelessWidget {
     this.onImportNovel,
     this.onCreateProject,
     this.onSelectProject,
+    this.onOpenProjectFolder,
+    this.onOpenProjectReport,
     this.onDeleteProject,
   });
 
@@ -1126,6 +1134,8 @@ class _BookBreakdownProjectsSection extends StatelessWidget {
   final VoidCallback? onImportNovel;
   final VoidCallback? onCreateProject;
   final ValueChanged<int>? onSelectProject;
+  final ValueChanged<int>? onOpenProjectFolder;
+  final ValueChanged<int>? onOpenProjectReport;
   final ValueChanged<int>? onDeleteProject;
 
   @override
@@ -1223,6 +1233,8 @@ class _BookBreakdownProjectsSection extends StatelessWidget {
                             isCurrent: project.id == currentProject?.id,
                             tableWidth: tableWidth,
                             onSelectProject: onSelectProject,
+                            onOpenProjectFolder: onOpenProjectFolder,
+                            onOpenProjectReport: onOpenProjectReport,
                             onDeleteProject: onDeleteProject,
                           ),
                           if (project != projects.last)
@@ -1289,6 +1301,8 @@ class _BookBreakdownProjectRow extends StatelessWidget {
     required this.isCurrent,
     required this.tableWidth,
     this.onSelectProject,
+    this.onOpenProjectFolder,
+    this.onOpenProjectReport,
     this.onDeleteProject,
   });
 
@@ -1296,6 +1310,8 @@ class _BookBreakdownProjectRow extends StatelessWidget {
   final bool isCurrent;
   final double tableWidth;
   final ValueChanged<int>? onSelectProject;
+  final ValueChanged<int>? onOpenProjectFolder;
+  final ValueChanged<int>? onOpenProjectReport;
   final ValueChanged<int>? onDeleteProject;
 
   @override
@@ -1351,7 +1367,14 @@ class _BookBreakdownProjectRow extends StatelessWidget {
                 child: _BookProjectActionButton(
                   icon: action.$2,
                   label: action.$1,
-                  onPressed: () => onSelectProject?.call(project.id),
+                  onPressed: () {
+                    if (project.status ==
+                        BookDeconstructionProjectStatus.completed) {
+                      onOpenProjectReport?.call(project.id);
+                    } else {
+                      onOpenProjectFolder?.call(project.id);
+                    }
+                  },
                 ),
               ),
             ),
@@ -1359,7 +1382,11 @@ class _BookBreakdownProjectRow extends StatelessWidget {
               width: _bookProjectMenuWidth,
               child: _BookProjectMoreMenu(
                 isCurrent: isCurrent,
+                isCompleted:
+                    project.status == BookDeconstructionProjectStatus.completed,
                 onSelect: () => onSelectProject?.call(project.id),
+                onOpenFolder: () => onOpenProjectFolder?.call(project.id),
+                onOpenReport: () => onOpenProjectReport?.call(project.id),
                 onDelete: () => onDeleteProject?.call(project.id),
               ),
             ),
@@ -1414,12 +1441,18 @@ class _BookProjectProgress extends StatelessWidget {
 class _BookProjectMoreMenu extends StatelessWidget {
   const _BookProjectMoreMenu({
     required this.isCurrent,
+    required this.isCompleted,
     required this.onSelect,
+    required this.onOpenFolder,
+    required this.onOpenReport,
     required this.onDelete,
   });
 
   final bool isCurrent;
+  final bool isCompleted;
   final VoidCallback onSelect;
+  final VoidCallback onOpenFolder;
+  final VoidCallback onOpenReport;
   final VoidCallback onDelete;
 
   @override
@@ -1433,6 +1466,10 @@ class _BookProjectMoreMenu extends StatelessWidget {
         switch (action) {
           case _BookProjectMenuAction.select:
             onSelect();
+          case _BookProjectMenuAction.openFolder:
+            onOpenFolder();
+          case _BookProjectMenuAction.openReport:
+            onOpenReport();
           case _BookProjectMenuAction.delete:
             onDelete();
         }
@@ -1444,6 +1481,15 @@ class _BookProjectMoreMenu extends StatelessWidget {
           child: const Text('设为当前项目'),
         ),
         const PopupMenuItem(
+          value: _BookProjectMenuAction.openFolder,
+          child: Text('打开项目文件夹'),
+        ),
+        PopupMenuItem(
+          value: _BookProjectMenuAction.openReport,
+          enabled: isCompleted,
+          child: const Text('查看报告'),
+        ),
+        const PopupMenuItem(
           value: _BookProjectMenuAction.delete,
           child: Text('删除项目'),
         ),
@@ -1452,7 +1498,7 @@ class _BookProjectMoreMenu extends StatelessWidget {
   }
 }
 
-enum _BookProjectMenuAction { select, delete }
+enum _BookProjectMenuAction { select, openFolder, openReport, delete }
 
 (String, IconData) _projectAction(
   BookDeconstructionProjectStatus status,

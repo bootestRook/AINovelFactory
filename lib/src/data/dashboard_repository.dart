@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -5,6 +6,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../book_lab/book_deconstruction_workflow.dart';
 import '../dashboard/dashboard_models.dart';
+
+const _bookChapterPromptMaxCharacters = 30000;
 
 class DashboardRepository {
   DashboardRepository({
@@ -104,20 +107,25 @@ class DashboardRepository {
         'updated_at': timestamp,
       });
 
-      final chapterId = await txn.insert('chapters', {
-        'novel_id': novelId,
-        'title': title,
-        'content': content,
-        'word_count': countWritingUnits(content),
-        'updated_at': timestamp,
-      });
+      final chapters = _splitImportedChapters(content, title);
+      int? firstChapterId;
+      for (final chapter in chapters) {
+        final chapterId = await txn.insert('chapters', {
+          'novel_id': novelId,
+          'title': chapter.title,
+          'content': chapter.content,
+          'word_count': countWritingUnits(chapter.content),
+          'updated_at': timestamp,
+        });
+        firstChapterId ??= chapterId;
+      }
 
       await txn.insert(
         'recent_writing',
         {
           'id': 1,
           'novel_id': novelId,
-          'chapter_id': chapterId,
+          'chapter_id': firstChapterId,
           'updated_at': timestamp,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
@@ -225,6 +233,38 @@ class DashboardRepository {
     });
   }
 
+  Future<void> resetBookDeconstructionProject(int projectId) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'book_deconstruction_nodes',
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+      );
+      await txn.delete(
+        'book_deconstruction_artifacts',
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+      );
+      await txn.update(
+        'book_deconstruction_projects',
+        {
+          'status': BookDeconstructionProjectStatus.draft.name,
+          'current_node_id': null,
+          'progress': 0.0,
+          'character_count': 0,
+          'foreshadowing_count': 0,
+          'style_asset_count': 0,
+          'updated_at': timestamp,
+        },
+        where: 'id = ?',
+        whereArgs: [projectId],
+      );
+    });
+    await _refreshBookDeconstructionStats(db, projectId);
+  }
+
   Future<void> setBookDeconstructionProjectStatus({
     required int projectId,
     required BookDeconstructionProjectStatus status,
@@ -294,6 +334,170 @@ class DashboardRepository {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<String> buildBookDeconstructionNodeOutput({
+    required int projectId,
+    required BookDeconstructionNode node,
+  }) async {
+    final db = await _open();
+    final data = await _loadBookExportData(db, projectId);
+    final payload = <String, Object?>{
+      'project_id': projectId,
+      'node_id': node.id,
+      'node_name': node.name,
+      'generated_at': DateTime.now().toIso8601String(),
+      'book_title': data.novelTitle,
+      'chapter_count': data.chapters.length,
+      'total_words': data.totalWords,
+    };
+
+    switch (node.id) {
+      case 'book_text_cleaning':
+      case 'gate_1_text_cleaned':
+        payload['chapters'] = [
+          for (final chapter in data.chapters)
+            {
+              'title': chapter.title,
+              'word_count': chapter.wordCount,
+            },
+        ];
+      case 'book_chapter_content':
+      case 'gate_2_chapter_content':
+        payload['chapters'] = [
+          for (final chapter in data.chapters)
+            {
+              'title': chapter.title,
+              'word_count': chapter.wordCount,
+              'excerpt': _excerpt(chapter.content),
+            },
+        ];
+      case 'style_chapter_statistics':
+        payload.addAll(_chapterStatistics(data.chapters));
+      case 'book_relationships':
+      case 'style_character_voice':
+        payload['character_candidates'] = _characterCandidates(data.fullText);
+      case 'foreshadowing_initial':
+      case 'foreshadowing_review':
+        payload['foreshadowing_markers'] = _markerLines(data.fullText, [
+          '秘密',
+          '神秘',
+          '谜',
+          '龙',
+          '命运',
+        ]);
+      case 'style_global':
+      case 'style_scene_voice':
+        payload['style_notes'] = _styleNotes(data.fullText);
+      default:
+        payload['status'] = 'passed';
+    }
+
+    return const JsonEncoder.withIndent('  ').convert(payload);
+  }
+
+  Future<String> buildBookDeconstructionAgentPrompt({
+    required int projectId,
+    required BookDeconstructionNode node,
+  }) async {
+    final db = await _open();
+    final data = await _loadBookExportData(db, projectId);
+    final artifacts = data.artifacts
+        .where((artifact) =>
+            artifact.path != _artifactPathForNode(projectId, node))
+        .take(8)
+        .toList();
+
+    final buffer = StringBuffer()
+      ..writeln('你是 AI 小说工坊的拆书 Agent。')
+      ..writeln('当前节点：${node.name} (${node.id})')
+      ..writeln('小说：${data.novelTitle}')
+      ..writeln('总字数：${data.totalWords}')
+      ..writeln('章节/分幕数量：${data.chapters.length}')
+      ..writeln()
+      ..writeln('请基于给定文本做真实分析，不要只复述节点名。')
+      ..writeln('输出 Markdown，结构清晰，包含可复用结论；如果信息不足，请明确说明不足。')
+      ..writeln()
+      ..writeln('## 章节索引与片段');
+
+    for (var i = 0; i < data.chapters.length; i++) {
+      final chapter = data.chapters[i];
+      buffer
+        ..writeln()
+        ..writeln('### ${i + 1}. ${chapter.title} (${chapter.wordCount} 字)')
+        ..writeln(
+          _excerpt(
+            chapter.content,
+            maxLength: _bookChapterPromptMaxCharacters,
+          ),
+        );
+    }
+
+    if (artifacts.isNotEmpty) {
+      buffer
+        ..writeln()
+        ..writeln('## 上游节点产物');
+      for (final artifact in artifacts) {
+        buffer
+          ..writeln()
+          ..writeln('### ${artifact.path}')
+          ..writeln(_excerpt(artifact.content, maxLength: 1200));
+      }
+    }
+
+    buffer
+      ..writeln()
+      ..writeln('## 本节点要求')
+      ..writeln(_agentTaskInstruction(node));
+    return buffer.toString();
+  }
+
+  Future<String> exportBookDeconstructionProjectFiles(int projectId) async {
+    final db = await _open();
+    final data = await _loadBookExportData(db, projectId);
+    final directory = Directory(_bookProjectDirectory(projectId));
+    await directory.create(recursive: true);
+
+    await _writeTextFile(
+      '${directory.path}${Platform.pathSeparator}source${Platform.pathSeparator}raw.txt',
+      data.fullText,
+    );
+    await _writeTextFile(
+      '${directory.path}${Platform.pathSeparator}source${Platform.pathSeparator}chapters${Platform.pathSeparator}index.json',
+      const JsonEncoder.withIndent('  ').convert([
+        for (var i = 0; i < data.chapters.length; i++)
+          {
+            'index': i + 1,
+            'title': data.chapters[i].title,
+            'word_count': data.chapters[i].wordCount,
+            'file': 'ch${(i + 1).toString().padLeft(3, '0')}.txt',
+          },
+      ]),
+    );
+    for (var i = 0; i < data.chapters.length; i++) {
+      await _writeTextFile(
+        '${directory.path}${Platform.pathSeparator}source${Platform.pathSeparator}chapters${Platform.pathSeparator}ch${(i + 1).toString().padLeft(3, '0')}.txt',
+        data.chapters[i].content,
+      );
+    }
+
+    for (final artifact in data.artifacts) {
+      await _writeTextFile(
+        '${directory.path}${Platform.pathSeparator}${artifact.path.replaceAll('/', Platform.pathSeparator)}',
+        artifact.content,
+      );
+    }
+
+    await _writeTextFile(
+      '${directory.path}${Platform.pathSeparator}report.md',
+      _buildBookReport(data),
+    );
+    return directory.path;
+  }
+
+  Future<String> exportBookDeconstructionReport(int projectId) async {
+    final directory = await exportBookDeconstructionProjectFiles(projectId);
+    return '$directory${Platform.pathSeparator}report.md';
   }
 
   Future<bool> bookDeconstructionProjectHasNovel(int projectId) async {
@@ -613,8 +817,9 @@ ORDER BY p.updated_at DESC, p.id DESC
       limit: 1,
     );
     final novelId = projectRows.isEmpty ? null : projectRows.single['novel_id'];
-    final chapterCount =
-        novelId == null ? 0 : await _countChapters(db, novelId as int);
+    final data =
+        novelId == null ? null : await _loadBookExportData(db, projectId);
+    final chapterCount = data?.chapters.length ?? 0;
     final progress =
         passedNodeIds.length / bookDeconstructionWorkflowNodes.length;
 
@@ -624,22 +829,13 @@ ORDER BY p.updated_at DESC, p.id DESC
         'progress': progress.clamp(0.0, 1.0),
         'chapter_count':
             passedNodeIds.contains('gate_1_text_cleaned') ? chapterCount : 0,
-        'character_count': await _countArtifacts(db, projectId, 'characters'),
-        'foreshadowing_count':
-            await _countArtifacts(db, projectId, 'foreshadowing'),
+        'character_count': data == null ? 0 : _characterCount(data),
+        'foreshadowing_count': data == null ? 0 : _foreshadowingCount(data),
         'style_asset_count': await _countArtifacts(db, projectId, 'style'),
       },
       where: 'id = ?',
       whereArgs: [projectId],
     );
-  }
-
-  Future<int> _countChapters(Database db, int novelId) async {
-    final rows = await db.rawQuery(
-      'SELECT COUNT(*) AS total FROM chapters WHERE novel_id = ?',
-      [novelId],
-    );
-    return rows.single['total'] as int;
   }
 
   Future<int> _countArtifacts(
@@ -656,6 +852,110 @@ WHERE project_id = ? AND artifact_kind = ?
       [projectId, kind],
     );
     return rows.single['total'] as int;
+  }
+
+  int _characterCount(_BookExportData data) {
+    final names = <String>{};
+    for (final artifact in data.artifacts) {
+      if (artifact.kind != 'characters') {
+        continue;
+      }
+      for (final match in RegExp(r'\*\*([\u4e00-\u9fff]{2,6})\*\*')
+          .allMatches(artifact.content)) {
+        names.add(match.group(1)!);
+      }
+    }
+    if (names.isNotEmpty) {
+      return names.length;
+    }
+    return _characterCandidates(data.fullText).length;
+  }
+
+  int _foreshadowingCount(_BookExportData data) {
+    final fromArtifacts = data.artifacts
+        .where((artifact) => artifact.kind == 'foreshadowing')
+        .map((artifact) => artifact.content
+            .split('\n')
+            .where(_looksLikeNumberedHeading)
+            .length)
+        .fold<int>(0, (total, count) => total + count);
+    if (fromArtifacts > 0) {
+      return fromArtifacts;
+    }
+    return _markerLines(data.fullText, [
+      '秘密',
+      '神秘',
+      '谜',
+      '龙',
+      '命运',
+    ]).length;
+  }
+
+  Future<_BookExportData> _loadBookExportData(
+    Database db,
+    int projectId,
+  ) async {
+    final projectRows = await db.rawQuery(
+      '''
+SELECT
+  p.id,
+  p.title,
+  p.status,
+  p.progress,
+  n.id AS novel_id,
+  n.title AS novel_title
+FROM book_deconstruction_projects p
+LEFT JOIN novels n ON n.id = p.novel_id
+WHERE p.id = ?
+LIMIT 1
+''',
+      [projectId],
+    );
+    if (projectRows.isEmpty) {
+      throw ArgumentError.value(projectId, 'projectId', 'Project not found.');
+    }
+    final project = projectRows.single;
+    final novelId = project['novel_id'] as int?;
+    if (novelId == null) {
+      throw StateError('Book deconstruction project has no novel assigned.');
+    }
+
+    final chapterRows = await db.query(
+      'chapters',
+      where: 'novel_id = ?',
+      whereArgs: [novelId],
+      orderBy: 'id ASC',
+    );
+    final artifactRows = await db.query(
+      'book_deconstruction_artifacts',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+      orderBy: 'artifact_path ASC',
+    );
+
+    return _BookExportData(
+      projectId: projectId,
+      projectTitle: project['title'] as String,
+      projectStatus: project['status'] as String,
+      progress: project['progress'] as double,
+      novelTitle: project['novel_title'] as String? ?? '未命名小说',
+      chapters: [
+        for (final row in chapterRows)
+          _ExportChapter(
+            title: row['title'] as String,
+            content: row['content'] as String,
+            wordCount: row['word_count'] as int,
+          ),
+      ],
+      artifacts: [
+        for (final row in artifactRows)
+          _ExportArtifact(
+            path: row['artifact_path'] as String,
+            kind: row['artifact_kind'] as String,
+            content: row['content'] as String,
+          ),
+      ],
+    );
   }
 
   Future<void> _ensureDatabaseFile() async {
@@ -806,6 +1106,126 @@ LIMIT 1
   }
 }
 
+class _ImportedChapter {
+  const _ImportedChapter({
+    required this.title,
+    required this.content,
+  });
+
+  final String title;
+  final String content;
+}
+
+class _BookExportData {
+  const _BookExportData({
+    required this.projectId,
+    required this.projectTitle,
+    required this.projectStatus,
+    required this.progress,
+    required this.novelTitle,
+    required this.chapters,
+    required this.artifacts,
+  });
+
+  final int projectId;
+  final String projectTitle;
+  final String projectStatus;
+  final double progress;
+  final String novelTitle;
+  final List<_ExportChapter> chapters;
+  final List<_ExportArtifact> artifacts;
+
+  int get totalWords => chapters.fold(
+        0,
+        (total, chapter) => total + chapter.wordCount,
+      );
+
+  String get fullText =>
+      chapters.map((chapter) => chapter.content).join('\n\n');
+}
+
+class _ExportChapter {
+  const _ExportChapter({
+    required this.title,
+    required this.content,
+    required this.wordCount,
+  });
+
+  final String title;
+  final String content;
+  final int wordCount;
+}
+
+class _ExportArtifact {
+  const _ExportArtifact({
+    required this.path,
+    required this.kind,
+    required this.content,
+  });
+
+  final String path;
+  final String kind;
+  final String content;
+}
+
+List<_ImportedChapter> _splitImportedChapters(String content, String title) {
+  final normalized = content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  final lines = normalized.split('\n');
+  final chapters = <_ImportedChapter>[];
+  var currentTitle = title;
+  var buffer = <String>[];
+  var sawHeading = false;
+
+  void flush() {
+    final text = buffer.join('\n').trim();
+    if (text.isEmpty) {
+      return;
+    }
+    chapters.add(_ImportedChapter(title: currentTitle, content: text));
+    buffer = <String>[];
+  }
+
+  for (final line in lines) {
+    final heading = _chapterHeadingTitle(line);
+    if (heading != null) {
+      if (sawHeading) {
+        flush();
+      }
+      currentTitle = heading;
+      sawHeading = true;
+    }
+    buffer.add(line);
+  }
+  flush();
+
+  if (chapters.isEmpty) {
+    return [_ImportedChapter(title: title, content: normalized.trim())];
+  }
+  return chapters;
+}
+
+String? _chapterHeadingTitle(String line) {
+  final text = line.trim();
+  if (text.isEmpty || text.length > 80) {
+    return null;
+  }
+  final heading = RegExp(
+    r'^(第[一二三四五六七八九十百千万零〇两\d]+[章节卷部集幕回][^\n]*)$',
+  );
+  if (heading.hasMatch(text) && !text.endsWith('完】')) {
+    return text;
+  }
+  if (RegExp(r'^(序章|楔子|尾声)(\s+.*)?$').hasMatch(text)) {
+    return text;
+  }
+  if (text.length <= 40 &&
+      RegExp(r'^[0-9０-９一二三四五六七八九十百]+[.．、]\s*\S.{0,32}$').hasMatch(text) &&
+      !RegExp(r'[。！？!?，,；;：:]').hasMatch(text)) {
+    return text;
+  }
+  return null;
+}
+
 Future<String> _readImportContent(File file) async {
   final extension = _extensionOf(file.path);
   switch (extension) {
@@ -877,6 +1297,205 @@ String _decodeHtmlEntities(String text) {
       .replaceAll('&quot;', '"')
       .replaceAll('&#39;', "'")
       .replaceAll('&apos;', "'");
+}
+
+Future<void> _writeTextFile(String path, String content) async {
+  final file = File(path);
+  await file.parent.create(recursive: true);
+  await file.writeAsString(content);
+}
+
+String _bookProjectDirectory(int projectId) {
+  return [
+    Directory.current.path,
+    'book_deconstruction_projects',
+    'book_$projectId',
+  ].join(Platform.pathSeparator);
+}
+
+String _buildBookReport(_BookExportData data) {
+  final buffer = StringBuffer()
+    ..writeln('# ${data.projectTitle}')
+    ..writeln()
+    ..writeln('- 小说：${data.novelTitle}')
+    ..writeln('- 状态：${data.projectStatus}')
+    ..writeln('- 进度：${(data.progress * 100).round()}%')
+    ..writeln('- 章节/分幕：${data.chapters.length}')
+    ..writeln('- 总字数：${data.totalWords}')
+    ..writeln()
+    ..writeln('## 章节索引')
+    ..writeln();
+  for (var i = 0; i < data.chapters.length; i++) {
+    final chapter = data.chapters[i];
+    buffer.writeln(
+      '${i + 1}. ${chapter.title}（${chapter.wordCount} 字）',
+    );
+  }
+  buffer
+    ..writeln()
+    ..writeln('## 本地拆书产物')
+    ..writeln();
+  if (data.artifacts.isEmpty) {
+    buffer.writeln('暂无节点产物。');
+  } else {
+    for (final artifact in data.artifacts) {
+      buffer.writeln('- `${artifact.path}`（${artifact.kind}）');
+    }
+  }
+  buffer
+    ..writeln()
+    ..writeln('## 说明')
+    ..writeln()
+    ..writeln('当前报告由本地导入文本和工作流节点产物生成。')
+    ..writeln('真实人物关系、伏笔、文风等深度分析需要后续接入拆书 Agent/LLM 后生成。');
+  return buffer.toString();
+}
+
+Map<String, Object> _chapterStatistics(List<_ExportChapter> chapters) {
+  if (chapters.isEmpty) {
+    return {
+      'average_words': 0,
+      'min_words': 0,
+      'max_words': 0,
+    };
+  }
+  final counts = chapters.map((chapter) => chapter.wordCount).toList()..sort();
+  final total = counts.fold<int>(0, (sum, count) => sum + count);
+  return {
+    'average_words': (total / counts.length).round(),
+    'min_words': counts.first,
+    'max_words': counts.last,
+  };
+}
+
+List<Map<String, Object>> _characterCandidates(String text) {
+  final names = <String, int>{};
+  final commonNames = [
+    '路明非',
+    '楚子航',
+    '恺撒',
+    '诺诺',
+    '芬格尔',
+    '昂热',
+    '古德里安',
+    '曼施坦因',
+    '施耐德',
+    '陈雯雯',
+    '赵孟华',
+    '路鸣泽',
+    '叶胜',
+    '亚纪',
+  ];
+  for (final name in commonNames) {
+    final count = RegExp(RegExp.escape(name)).allMatches(text).length;
+    if (count > 0) {
+      names[name] = count;
+    }
+  }
+  final entries = names.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  return [
+    for (final entry in entries.take(20))
+      {
+        'name': entry.key,
+        'mentions': entry.value,
+      },
+  ];
+}
+
+List<Map<String, Object>> _markerLines(
+  String text,
+  List<String> markers,
+) {
+  final results = <Map<String, Object>>[];
+  for (final line in text.split('\n')) {
+    final trimmed = line.trim();
+    if (trimmed.length < 12) {
+      continue;
+    }
+    String? marker;
+    for (final candidate in markers) {
+      if (trimmed.contains(candidate)) {
+        marker = candidate;
+        break;
+      }
+    }
+    if (marker == null) {
+      continue;
+    }
+    results.add({
+      'marker': marker,
+      'excerpt': _excerpt(trimmed, maxLength: 120),
+    });
+    if (results.length >= 20) {
+      break;
+    }
+  }
+  return results;
+}
+
+bool _looksLikeNumberedHeading(String line) {
+  final text = line.trimLeft();
+  final hashes = text.startsWith('#### ')
+      ? 5
+      : text.startsWith('### ')
+          ? 4
+          : 0;
+  if (hashes == 0 || text.length <= hashes) {
+    return false;
+  }
+  final first = text.codeUnitAt(hashes);
+  return first >= 0x30 && first <= 0x39;
+}
+
+Map<String, Object> _styleNotes(String text) {
+  final sentenceCount = RegExp(r'[。！？!?]').allMatches(text).length;
+  final dialogueCount = RegExp(r'[“"]([^”"]+)[”"]').allMatches(text).length;
+  return {
+    'sentence_count': sentenceCount,
+    'dialogue_count': dialogueCount,
+    'dialogue_ratio': sentenceCount == 0
+        ? 0
+        : double.parse((dialogueCount / sentenceCount).toStringAsFixed(3)),
+  };
+}
+
+String _excerpt(String text, {int maxLength = 180}) {
+  final compact = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+  return '${compact.substring(0, maxLength)}...';
+}
+
+String _agentTaskInstruction(BookDeconstructionNode node) {
+  switch (node.agentId ?? node.id) {
+    case 'book_master_control':
+      return '识别作品基本信息、体裁、主要阅读目标，并给后续拆书节点制定分析重点。';
+    case 'book_text_cleaning':
+      return '检查文本结构、章节/分幕切分质量、目录噪声和正文异常，输出清洗建议与问题清单。';
+    case 'book_chapter_content':
+      return '逐章/逐幕概括剧情推进、关键冲突、登场人物、信息增量和读者钩子。';
+    case 'book_overview':
+      return '生成全书总览：核心卖点、主线剧情、世界观设定、人物弧光、主题与读者体验。';
+    case 'book_plot_structure':
+      return '分析情节结构：开端、转折、高潮、悬念递进、爽点节奏和章节功能分布。';
+    case 'book_business_mechanism':
+      return '分析商业机制：题材定位、受众预期、留存钩子、情绪奖励、可复用套路。';
+    case 'book_relationships':
+      return '抽取人物关系：核心人物、关系类型、阵营、冲突/亲密变化和关系网络。';
+    case 'book_foreshadowing_suspense':
+      return '抽取伏笔悬念：埋设位置、回收位置、悬念问题、读者预期和风险点。';
+    case 'book_style_fingerprint':
+      return '分析文风指纹：叙述视角、句式、对白比例、意象、节奏、幽默/热血/悬疑手法。';
+    case 'book_template_distillation':
+      return '蒸馏可迁移模板：章节结构模板、角色出场模板、冲突升级模板、钩子模板。';
+    case 'book_skill_compile':
+      return '把前序分析编译成写作 Skill：风格指南、结构模式、人物模式、禁用照抄规则。';
+    case 'book_quality_check':
+      return '质检所有拆书结论：指出证据不足、矛盾、遗漏和需要人工复核的位置。';
+  }
+  return '完成该节点要求的拆书分析，并输出可供后续节点复用的结构化结论。';
 }
 
 int countWritingUnits(String text) {

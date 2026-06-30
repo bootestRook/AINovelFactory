@@ -1,11 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'src/app/ai_models_client.dart';
 import 'src/app/app_appearance.dart';
 import 'src/app/app_agent_settings.dart';
 import 'src/app/app_ai_settings.dart';
@@ -387,6 +387,8 @@ class _DashboardHomeState extends State<DashboardHome> {
               onCreateProject: _createBookDeconstructionProject,
               onStartOrPause: _startOrPauseBookDeconstruction,
               onSelectProject: _selectBookDeconstructionProject,
+              onOpenProjectFolder: _openBookDeconstructionProjectFolder,
+              onOpenProjectReport: _openBookDeconstructionReport,
               onDeleteProject: _deleteBookDeconstructionProject,
             )
           : DashboardScreen(
@@ -556,6 +558,32 @@ class _DashboardHomeState extends State<DashboardHome> {
     });
   }
 
+  Future<void> _openBookDeconstructionProjectFolder(int projectId) async {
+    setState(() {
+      _activeBookDeconstructionProjectId = projectId;
+    });
+    try {
+      final path = await widget.repository
+          .exportBookDeconstructionProjectFiles(projectId);
+      await _openPath(path);
+    } catch (error) {
+      _showSnackBar('无法打开拆书项目文件夹：$error');
+    }
+  }
+
+  Future<void> _openBookDeconstructionReport(int projectId) async {
+    setState(() {
+      _activeBookDeconstructionProjectId = projectId;
+    });
+    try {
+      final path =
+          await widget.repository.exportBookDeconstructionReport(projectId);
+      await _openReport(path);
+    } catch (error) {
+      _showSnackBar('无法打开拆书报告：$error');
+    }
+  }
+
   Future<void> _deleteBookDeconstructionProject(int projectId) async {
     BookDeconstructionProject? project;
     for (final candidate in _bookDeconstructionProjects) {
@@ -619,6 +647,12 @@ class _DashboardHomeState extends State<DashboardHome> {
       );
       await _loadBookDeconstructionProjects(recoverInterrupted: false);
       return;
+    }
+
+    if (project.status == BookDeconstructionProjectStatus.completed ||
+        project.status == BookDeconstructionProjectStatus.failed) {
+      await widget.repository.resetBookDeconstructionProject(project.id);
+      await _loadBookDeconstructionProjects(recoverInterrupted: false);
     }
 
     if (_bookDeconstructionRun != null) {
@@ -688,40 +722,75 @@ class _DashboardHomeState extends State<DashboardHome> {
         return;
       }
 
-      final node = ready.first;
-      await widget.repository.updateBookDeconstructionNodeStatus(
-        projectId: projectId,
-        nodeId: node.id,
-        status: BookDeconstructionNodeStatus.running,
-      );
+      final batch = ready
+          .take(widget.aiSettings.bookDeconstructionConcurrency)
+          .toList(growable: false);
+      for (final node in batch) {
+        await widget.repository.updateBookDeconstructionNodeStatus(
+          projectId: projectId,
+          nodeId: node.id,
+          status: BookDeconstructionNodeStatus.running,
+        );
+      }
       await widget.repository.setBookDeconstructionProjectStatus(
         projectId: projectId,
         status: BookDeconstructionProjectStatus.running,
-        currentNodeId: node.id,
+        currentNodeId: batch.first.id,
       );
       await _loadBookDeconstructionProjects(recoverInterrupted: false);
       await Future<void>.delayed(const Duration(milliseconds: 260));
 
       if (_bookDeconstructionStopRequested) {
-        await widget.repository.updateBookDeconstructionNodeStatus(
-          projectId: projectId,
-          nodeId: node.id,
-          status: BookDeconstructionNodeStatus.pending,
-          message: 'Paused before completion.',
-        );
+        for (final node in batch) {
+          await widget.repository.updateBookDeconstructionNodeStatus(
+            projectId: projectId,
+            nodeId: node.id,
+            status: BookDeconstructionNodeStatus.pending,
+            message: 'Paused before completion.',
+          );
+        }
         break;
       }
 
-      await widget.repository.recordBookDeconstructionNodeOutput(
-        projectId: projectId,
-        node: node,
-        content: _bookDeconstructionOutput(projectId, node),
-      );
-      await widget.repository.updateBookDeconstructionNodeStatus(
-        projectId: projectId,
-        nodeId: node.id,
-        status: BookDeconstructionNodeStatus.passed,
-      );
+      final results = await Future.wait([
+        for (final node in batch)
+          _runBookDeconstructionNode(projectId: projectId, node: node),
+      ]);
+      _BookNodeRunFailure? failure;
+      for (var i = 0; i < batch.length; i++) {
+        final node = batch[i];
+        final result = results[i];
+        if (result.error != null) {
+          failure ??= _BookNodeRunFailure(node, result.error!);
+          await widget.repository.updateBookDeconstructionNodeStatus(
+            projectId: projectId,
+            nodeId: node.id,
+            status: BookDeconstructionNodeStatus.failed,
+            message: result.error.toString(),
+          );
+          continue;
+        }
+        await widget.repository.recordBookDeconstructionNodeOutput(
+          projectId: projectId,
+          node: node,
+          content: result.content!,
+        );
+        await widget.repository.updateBookDeconstructionNodeStatus(
+          projectId: projectId,
+          nodeId: node.id,
+          status: BookDeconstructionNodeStatus.passed,
+        );
+      }
+      if (failure != null) {
+        await widget.repository.setBookDeconstructionProjectStatus(
+          projectId: projectId,
+          status: BookDeconstructionProjectStatus.failed,
+          currentNodeId: failure.node.id,
+        );
+        _showSnackBar('拆书节点失败：${failure.node.name}。${failure.error}');
+        await _loadBookDeconstructionProjects(recoverInterrupted: false);
+        return;
+      }
       await _loadBookDeconstructionProjects(recoverInterrupted: false);
     }
 
@@ -736,23 +805,105 @@ class _DashboardHomeState extends State<DashboardHome> {
     }
   }
 
-  String _bookDeconstructionOutput(
-    int projectId,
-    BookDeconstructionNode node,
-  ) {
-    return jsonEncode({
-      'project_id': projectId,
-      'node_id': node.id,
-      'node_name': node.name,
-      'status': 'passed',
-      'generated_at': DateTime.now().toIso8601String(),
-    });
+  Future<_BookNodeRunResult> _runBookDeconstructionNode({
+    required int projectId,
+    required BookDeconstructionNode node,
+  }) async {
+    try {
+      if (node.agentId == null) {
+        return _BookNodeRunResult(
+          content: await widget.repository.buildBookDeconstructionNodeOutput(
+            projectId: projectId,
+            node: node,
+          ),
+        );
+      }
+
+      final model = _modelForBookAgent(node.agentId!);
+      final provider = model == null ? null : _providerForModel(model);
+      if (model == null || provider == null) {
+        throw StateError('请先在设置里为“${node.name}”或“拆书 Agent”选择可用模型。');
+      }
+
+      final prompt = await widget.repository.buildBookDeconstructionAgentPrompt(
+        projectId: projectId,
+        node: node,
+      );
+      return _BookNodeRunResult(
+        content: await createOpenAiCompatibleChatCompletion(
+          apiKey: provider.apiKey.trim(),
+          baseUrl: provider.baseUrl.trim(),
+          model: model,
+          messages: [
+            {
+              'role': 'system',
+              'content': '你是严谨的中文长篇小说拆书专家。只依据用户提供的文本和上游产物分析，不编造不存在的情节。',
+            },
+            {
+              'role': 'user',
+              'content': prompt,
+            },
+          ],
+        ),
+      );
+    } catch (error) {
+      return _BookNodeRunResult(error: error);
+    }
+  }
+
+  String? _modelForBookAgent(String agentId) {
+    final configured = widget.agentSettings.effectiveModelFor(
+      agentId,
+      fallbackAgentId: 'book_breakdown',
+    );
+    if (configured.trim().isNotEmpty) {
+      return configured.trim();
+    }
+    for (final provider in widget.aiSettings.providers) {
+      if (provider.isReady) {
+        return provider.selectedModel.trim();
+      }
+    }
+    return null;
+  }
+
+  AppAiProviderSettings? _providerForModel(String model) {
+    for (final provider in widget.aiSettings.providers) {
+      if (!provider.isReady) {
+        continue;
+      }
+      if (provider.availableModels.contains(model) ||
+          provider.selectedModel == model) {
+        return provider;
+      }
+    }
+    return null;
   }
 
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  Future<void> _openPath(String path) async {
+    if (Platform.isWindows) {
+      await Process.start('explorer.exe', [path]);
+      return;
+    }
+    if (Platform.isMacOS) {
+      await Process.start('open', [path]);
+      return;
+    }
+    await Process.start('xdg-open', [path]);
+  }
+
+  Future<void> _openReport(String path) async {
+    if (Platform.isWindows) {
+      await Process.start('notepad.exe', [path]);
+      return;
+    }
+    await _openPath(path);
   }
 
   void _openProject(NovelSummary novel) {
@@ -805,6 +956,20 @@ class _DashboardHomeState extends State<DashboardHome> {
       showAgents: showAgents,
     );
   }
+}
+
+class _BookNodeRunResult {
+  const _BookNodeRunResult({this.content, this.error});
+
+  final String? content;
+  final Object? error;
+}
+
+class _BookNodeRunFailure {
+  const _BookNodeRunFailure(this.node, this.error);
+
+  final BookDeconstructionNode node;
+  final Object error;
 }
 
 class _AppearanceBackground extends StatelessWidget {
