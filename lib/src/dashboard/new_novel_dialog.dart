@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
+import '../app/app_localizations.dart';
 import '../app/app_theme.dart';
+import '../widgets/app_select_field.dart';
 
 const novelCategories = [
   '玄幻',
@@ -106,6 +108,7 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final l10n = context.l10n;
 
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
@@ -120,7 +123,7 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '新建作品',
+                  l10n.text('newNovel.title'),
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         color: colors.text,
                         fontWeight: FontWeight.w800,
@@ -200,12 +203,12 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
                   children: [
                     TextButton(
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('取消'),
+                      child: Text(l10n.text('action.cancel')),
                     ),
                     const SizedBox(width: 10),
                     FilledButton(
                       onPressed: _submit,
-                      child: const Text('创建'),
+                      child: Text(l10n.text('action.create')),
                     ),
                   ],
                 ),
@@ -265,12 +268,13 @@ class _CoverPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
     final path = coverPath;
+    final l10n = context.l10n;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          '封面',
+          l10n.text('newNovel.cover'),
           style: TextStyle(color: colors.text, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
@@ -292,7 +296,7 @@ class _CoverPicker extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: onPick,
           icon: const Icon(Icons.image_outlined, size: 18),
-          label: const Text('选择封面'),
+          label: Text(l10n.text('newNovel.chooseCover')),
         ),
       ],
     );
@@ -334,18 +338,21 @@ class _NovelForm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _LabeledControl(
-          label: '作品名称',
+          label: l10n.text('newNovel.name'),
           child: TextFormField(
             controller: titleController,
             autofocus: true,
-            decoration: const InputDecoration(hintText: '请输入作品名称'),
+            decoration:
+                InputDecoration(hintText: l10n.text('newNovel.nameHint')),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
-                return '请输入作品名称';
+                return l10n.text('newNovel.nameRequired');
               }
               return null;
             },
@@ -353,36 +360,42 @@ class _NovelForm extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         _LabeledControl(
-          label: '简介描述',
+          label: l10n.text('newNovel.summary'),
           child: TextFormField(
             controller: summaryController,
             minLines: 4,
             maxLines: 4,
-            decoration: const InputDecoration(hintText: '请输入简介描述'),
+            decoration:
+                InputDecoration(hintText: l10n.text('newNovel.summaryHint')),
           ),
         ),
         const SizedBox(height: 14),
         _LabeledControl(
-          label: '分类',
-          child: _SelectField(
-            label: '分类',
+          label: l10n.text('newNovel.category'),
+          child: AppSelectField<String>(
+            label: l10n.text('newNovel.category'),
             value: category,
-            hint: '请选择分类',
-            options: novelCategories,
+            hint: l10n.text('newNovel.categoryHint'),
+            options: [
+              for (final category in novelCategories)
+                AppSelectOption(value: category, label: category),
+            ],
             onChanged: onCategoryChanged,
           ),
         ),
         if (category == '自定义新增') ...[
           const SizedBox(height: 10),
           _LabeledControl(
-            label: '自定义分类',
+            label: l10n.text('newNovel.customCategory'),
             child: TextFormField(
               controller: customCategoryController,
-              decoration: const InputDecoration(hintText: '请输入自定义分类'),
+              decoration: InputDecoration(
+                hintText: l10n.text('newNovel.customCategoryHint'),
+              ),
               validator: (value) {
                 if (category == '自定义新增' &&
                     (value == null || value.trim().isEmpty)) {
-                  return '请输入自定义分类';
+                  return l10n.text('newNovel.customCategoryRequired');
                 }
                 return null;
               },
@@ -391,26 +404,31 @@ class _NovelForm extends StatelessWidget {
         ],
         const SizedBox(height: 14),
         _LabeledControl(
-          label: '作品类型',
-          child: _SelectField(
-            label: '作品类型',
+          label: l10n.text('newNovel.workType'),
+          child: AppSelectField<String>(
+            label: l10n.text('newNovel.workType'),
             value: workType,
-            hint: '请选择作品类型',
-            options: novelWorkTypes,
+            hint: l10n.text('newNovel.workTypeHint'),
+            options: [
+              for (final workType in novelWorkTypes)
+                AppSelectOption(value: workType, label: workType),
+            ],
             onChanged: onWorkTypeChanged,
           ),
         ),
         if (workType == '自定义新增') ...[
           const SizedBox(height: 10),
           _LabeledControl(
-            label: '自定义作品类型',
+            label: l10n.text('newNovel.customWorkType'),
             child: TextFormField(
               controller: customWorkTypeController,
-              decoration: const InputDecoration(hintText: '请输入自定义作品类型'),
+              decoration: InputDecoration(
+                hintText: l10n.text('newNovel.customWorkTypeHint'),
+              ),
               validator: (value) {
                 if (workType == '自定义新增' &&
                     (value == null || value.trim().isEmpty)) {
-                  return '请输入自定义作品类型';
+                  return l10n.text('newNovel.customWorkTypeRequired');
                 }
                 return null;
               },
@@ -419,7 +437,7 @@ class _NovelForm extends StatelessWidget {
         ],
         const SizedBox(height: 14),
         _LabeledControl(
-          label: '标签',
+          label: l10n.text('newNovel.tags'),
           child: _TagEditor(
             tags: tags,
             controller: tagController,
@@ -454,6 +472,7 @@ class _TagEditor extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final l10n = context.l10n;
 
     return Wrap(
       spacing: 8,
@@ -482,7 +501,7 @@ class _TagEditor extends StatelessWidget {
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => onConfirm(),
               decoration: InputDecoration(
-                hintText: '标签',
+                hintText: l10n.text('newNovel.tags'),
                 suffixIcon: IconButton(
                   key: const ValueKey('confirm-tag'),
                   onPressed: onConfirm,
@@ -496,7 +515,7 @@ class _TagEditor extends StatelessWidget {
             key: const ValueKey('add-tag'),
             onPressed: onStartAdding,
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('添加标签'),
+            label: Text(l10n.text('newNovel.addTag')),
             style: OutlinedButton.styleFrom(
               foregroundColor: colors.muted,
               side: BorderSide(color: colors.line),
@@ -537,147 +556,6 @@ class _LabeledControl extends StatelessWidget {
         const SizedBox(height: 8),
         child,
       ],
-    );
-  }
-}
-
-class _SelectField extends StatefulWidget {
-  const _SelectField({
-    required this.label,
-    required this.value,
-    required this.hint,
-    required this.options,
-    required this.onChanged,
-  });
-
-  final String label;
-  final String? value;
-  final String hint;
-  final List<String> options;
-  final ValueChanged<String?> onChanged;
-
-  @override
-  State<_SelectField> createState() => _SelectFieldState();
-}
-
-class _SelectFieldState extends State<_SelectField> {
-  static const _itemHeight = 48.0;
-  static const _visibleItems = 4;
-
-  final _scrollController = ScrollController();
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = AppPalette.of(context);
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return MenuAnchor(
-          style: MenuStyle(
-            backgroundColor: WidgetStatePropertyAll(colors.card),
-            surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-            elevation: const WidgetStatePropertyAll(8),
-            padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-            shape: WidgetStatePropertyAll(
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-          ),
-          menuChildren: [
-            SizedBox(
-              key: ValueKey('select-menu-${widget.label}'),
-              width: constraints.maxWidth,
-              height: _itemHeight *
-                  (widget.options.length < _visibleItems
-                      ? widget.options.length
-                      : _visibleItems),
-              child: Scrollbar(
-                key: ValueKey('select-scrollbar-${widget.label}'),
-                controller: _scrollController,
-                thumbVisibility: widget.options.length > _visibleItems,
-                child: ListView.builder(
-                  controller: _scrollController,
-                  padding: EdgeInsets.zero,
-                  itemExtent: _itemHeight,
-                  primary: false,
-                  itemCount: widget.options.length,
-                  itemBuilder: (context, index) {
-                    final option = widget.options[index];
-                    final selected = option == widget.value;
-
-                    return Builder(
-                      builder: (context) {
-                        return InkWell(
-                          onTap: () {
-                            widget.onChanged(option);
-                            MenuController.maybeOf(context)?.close();
-                          },
-                          child: Container(
-                            alignment: Alignment.centerLeft,
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            color: selected
-                                ? colors.line.withValues(alpha: 0.5)
-                                : colors.card,
-                            child: Text(
-                              option,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: colors.text),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-          builder: (context, controller, child) {
-            final currentValue = widget.value;
-
-            return InkWell(
-              key: ValueKey('select-field-${widget.label}'),
-              onTap: () {
-                controller.isOpen ? controller.close() : controller.open();
-              },
-              child: InputDecorator(
-                isEmpty: currentValue == null || currentValue.isEmpty,
-                decoration: const InputDecoration(),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        currentValue == null || currentValue.isEmpty
-                            ? widget.hint
-                            : currentValue,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: currentValue == null || currentValue.isEmpty
-                              ? colors.muted
-                              : colors.text,
-                        ),
-                      ),
-                    ),
-                    Icon(
-                      controller.isOpen
-                          ? Icons.keyboard_arrow_up
-                          : Icons.keyboard_arrow_down,
-                      color: colors.muted,
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
     );
   }
 }

@@ -5,6 +5,7 @@ dist/
 .env.*
 !.env.example
 *.log
+ai_novel_factory_settings.json
 tsconfig.tsbuildinfo
 
 .dart_tool/

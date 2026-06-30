@@ -1,4 +1,5 @@
 import 'package:ai_novel_factory/src/app/app_theme.dart';
+import 'package:ai_novel_factory/src/book_lab/book_deconstruction_workflow.dart';
 import 'package:ai_novel_factory/src/dashboard/dashboard_models.dart';
 import 'package:ai_novel_factory/src/dashboard/dashboard_screen.dart';
 import 'package:flutter/material.dart';
@@ -167,6 +168,203 @@ void main() {
     expect(_scaffoldBackground(tester), AppPalette.dark.background);
     expect(find.byIcon(Icons.light_mode), findsOneWidget);
   });
+
+  testWidgets('settings button appears when action is available',
+      (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var opened = false;
+
+    await tester.pumpWidget(_wrap(
+      DashboardScreen(
+        state: DashboardViewState(
+          mode: DashboardMode.firstUse,
+          novels: const [],
+          visibleNovels: const [],
+          totalWordCount: 0,
+          today: DateTime(2026, 6, 29),
+          searchQuery: '',
+        ),
+        actions: _actions(
+          openSettings: () {
+            opened = true;
+          },
+        ),
+        searchController: controller,
+        onSearchChanged: (_) {},
+      ),
+    ));
+
+    expect(find.widgetWithText(OutlinedButton, '设置'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, '设置'));
+    expect(opened, isTrue);
+  });
+
+  testWidgets('book breakdown button appears when action is available',
+      (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var opened = false;
+
+    await tester.pumpWidget(_wrap(
+      DashboardScreen(
+        state: DashboardViewState(
+          mode: DashboardMode.firstUse,
+          novels: const [],
+          visibleNovels: const [],
+          totalWordCount: 0,
+          today: DateTime(2026, 6, 29),
+          searchQuery: '',
+        ),
+        actions: _actions(
+          openBookBreakdown: () {
+            opened = true;
+          },
+        ),
+        searchController: controller,
+        onSearchChanged: (_) {},
+      ),
+    ));
+
+    expect(find.widgetWithText(OutlinedButton, '拆书'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, '拆书'));
+    expect(opened, isTrue);
+  });
+  testWidgets('book deconstruction screen shows workspace and back action',
+      (tester) async {
+    var wentBack = false;
+
+    await tester.pumpWidget(_wrap(
+      BookDeconstructionScreen(
+        today: DateTime(2026, 6, 30),
+        onBack: () {
+          wentBack = true;
+        },
+        onToggleTheme: () {},
+      ),
+    ));
+
+    expect(find.text('拆书工作台'), findsOneWidget);
+    expect(find.text('开始拆书'), findsWidgets);
+    expect(find.text('暂无拆书项目'), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_back), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('book-target-status-章节拆解-pending'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('book-pipeline-status-文本清洗-pending'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.check_circle), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    expect(wentBack, isTrue);
+  });
+
+  testWidgets('book deconstruction running nodes animate current statuses',
+      (tester) async {
+    await tester.pumpWidget(_wrap(
+      BookDeconstructionScreen(
+        today: DateTime(2026, 6, 30),
+        onBack: () {},
+        onToggleTheme: () {},
+        currentProject: _bookProject(
+          nodeStatuses: const {
+            'book_text_cleaning': BookDeconstructionNodeStatus.running,
+            'book_chapter_content': BookDeconstructionNodeStatus.running,
+          },
+        ),
+      ),
+    ));
+
+    expect(
+      find.byKey(
+        const ValueKey('book-target-status-章节拆解-running'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('book-pipeline-status-文本清洗-running'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('book-pipeline-status-拆解-running'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byType(CircularProgressIndicator), findsNWidgets(3));
+  });
+
+  testWidgets('book deconstruction project state drives actions and metrics',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1400, 900);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    var created = false;
+    var toggled = false;
+    final project = _bookProject(
+      nodeStatuses: const {
+        'book_text_cleaning': BookDeconstructionNodeStatus.passed,
+      },
+    );
+
+    await tester.pumpWidget(_wrap(
+      BookDeconstructionScreen(
+        today: DateTime(2026, 6, 30),
+        currentProject: project,
+        projects: [project],
+        onBack: () {},
+        onToggleTheme: () {},
+        onCreateProject: () {
+          created = true;
+        },
+        onStartOrPause: () {
+          toggled = true;
+        },
+      ),
+    ));
+
+    expect(find.text('Source Novel'), findsOneWidget);
+    expect(find.text('暂停拆书'), findsOneWidget);
+    expect(find.text('Book Lab'), findsWidgets);
+
+    await tester.tap(find.widgetWithText(FilledButton, '暂停拆书'));
+    await tester.tap(find.widgetWithText(FilledButton, '新建拆书'));
+
+    expect(toggled, isTrue);
+    expect(created, isTrue);
+  });
+}
+
+BookDeconstructionProject _bookProject({
+  Map<String, BookDeconstructionNodeStatus> nodeStatuses = const {},
+}) {
+  return BookDeconstructionProject(
+    id: 1,
+    title: 'Book Lab',
+    status: BookDeconstructionProjectStatus.running,
+    progress: 0.1,
+    chapterCount: 1,
+    characterCount: 0,
+    foreshadowingCount: 0,
+    styleAssetCount: 0,
+    updatedAt: DateTime(2026, 6, 30),
+    nodeStatuses: nodeStatuses,
+    novelId: 1,
+    novelTitle: 'Source Novel',
+  );
 }
 
 Color? _scaffoldBackground(WidgetTester tester) {
@@ -181,12 +379,17 @@ Widget _wrap(Widget child) {
   );
 }
 
-DashboardActions _actions() {
+DashboardActions _actions({
+  VoidCallback? openSettings,
+  VoidCallback? openBookBreakdown,
+}) {
   return DashboardActions(
     createNovel: () {},
     importNovel: () {},
     openProject: (_) {},
     toggleTheme: () {},
+    openSettings: openSettings,
+    openBookBreakdown: openBookBreakdown,
   );
 }
 

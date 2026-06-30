@@ -1,19 +1,30 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'src/app/app_appearance.dart';
+import 'src/app/app_agent_settings.dart';
+import 'src/app/app_ai_settings.dart';
+import 'src/app/app_dream_settings.dart';
+import 'src/app/app_editor_settings.dart';
+import 'src/app/app_localizations.dart';
+import 'src/app/app_settings_store.dart';
+import 'src/app/app_storage_settings.dart';
 import 'src/app/app_theme.dart';
+import 'src/app/system_fonts.dart';
+import 'src/book_lab/book_deconstruction_workflow.dart';
 import 'src/dashboard/dashboard_mapper.dart';
 import 'src/dashboard/dashboard_models.dart';
 import 'src/dashboard/dashboard_screen.dart';
 import 'src/dashboard/new_novel_dialog.dart';
 import 'src/data/dashboard_repository.dart';
+import 'src/settings/settings_dialog.dart';
 
-const _textFileTypes = [
-  XTypeGroup(
-    label: '小说文件',
-    extensions: ['txt', 'md', 'markdown', 'epub', 'html', 'htm'],
-  ),
-];
+const _textFileExtensions = ['txt', 'md', 'markdown', 'epub', 'html', 'htm'];
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,26 +44,173 @@ class DashboardApp extends StatefulWidget {
 }
 
 class _DashboardAppState extends State<DashboardApp> {
-  ThemeMode _themeMode = ThemeMode.light;
+  AppLanguage _language = AppLanguage.zhCn;
+  AppAppearance _appearance = const AppAppearance();
+  AppEditorSettings _editorSettings = const AppEditorSettings();
+  AppAiSettings _aiSettings = const AppAiSettings();
+  AppAgentSettings _agentSettings = const AppAgentSettings();
+  AppDreamSettings _dreamSettings = const AppDreamSettings();
+  AppStorageSettings _storageSettings = const AppStorageSettings();
+  final _settingsStore = AppSettingsStore.local();
+  Timer? _storageBackupTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPersistedSettings();
+    _loadSystemFonts();
+  }
+
+  Future<void> _loadPersistedSettings() async {
+    final aiSettings = await _settingsStore.loadAiSettings();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _aiSettings = aiSettings);
+  }
+
+  Future<void> _loadSystemFonts() async {
+    final fonts = await loadSystemFontFamilies();
+    if (!mounted || fonts.isEmpty) {
+      return;
+    }
+    setState(() {
+      _editorSettings = _editorSettings.copyWith(systemFonts: fonts);
+    });
+  }
+
+  @override
+  void dispose() {
+    _storageBackupTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'AI 小说工坊',
-      themeMode: _themeMode,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      home: DashboardHome(
-        repository: widget.repository,
-        onToggleTheme: () {
-          setState(() {
-            _themeMode =
-                _themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
-          });
-        },
+    return AppEditorSettingsScope(
+      settings: _editorSettings,
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: const AppLocalizations(AppLanguage.zhCn).text('app.title'),
+        locale: _language.locale,
+        supportedLocales: AppLanguage.values.map((language) => language.locale),
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+        ],
+        themeMode: _appearance.themeMode,
+        theme: AppTheme.lightFor(_appearance.visualTheme),
+        darkTheme: AppTheme.darkFor(_appearance.visualTheme),
+        home: AppAppearanceScope(
+          appearance: _appearance,
+          child: Builder(
+            builder: (context) {
+              return _AppearanceBackground(
+                appearance: _appearance,
+                child: DashboardHome(
+                  repository: widget.repository,
+                  language: _language,
+                  onLanguageChanged: (language) {
+                    setState(() => _language = language);
+                  },
+                  appearance: _appearance,
+                  onAppearanceChanged: (appearance) {
+                    setState(() => _appearance = appearance);
+                  },
+                  editorSettings: _editorSettings,
+                  onEditorSettingsChanged: (settings) {
+                    setState(() => _editorSettings = settings);
+                  },
+                  aiSettings: _aiSettings,
+                  onAiSettingsChanged: _changeAiSettings,
+                  agentSettings: _agentSettings,
+                  onAgentSettingsChanged: (settings) {
+                    setState(() => _agentSettings = settings);
+                  },
+                  dreamSettings: _dreamSettings,
+                  onDreamSettingsChanged: (settings) {
+                    setState(() => _dreamSettings = settings);
+                  },
+                  storageSettings: _storageSettings,
+                  onStorageSettingsChanged: _changeStorageSettings,
+                  onToggleTheme: () {
+                    setState(() {
+                      final next =
+                          Theme.of(context).brightness == Brightness.dark
+                              ? AppThemePreference.light
+                              : AppThemePreference.dark;
+                      _appearance = _appearance.copyWith(themePreference: next);
+                    });
+                  },
+                ),
+              );
+            },
+          ),
+        ),
       ),
     );
+  }
+
+  void _changeStorageSettings(AppStorageSettings settings) {
+    setState(() => _storageSettings = settings);
+    _scheduleStorageBackup(settings);
+  }
+
+  void _changeAiSettings(AppAiSettings settings) {
+    setState(() => _aiSettings = settings);
+    unawaited(_settingsStore.saveAiSettings(settings).catchError((_) {}));
+  }
+
+  void _scheduleStorageBackup(AppStorageSettings settings) {
+    _storageBackupTimer?.cancel();
+    _storageBackupTimer = null;
+
+    final interval = _backupInterval(settings.backupFrequency);
+    if (interval == null || settings.backupDirectory.trim().isEmpty) {
+      return;
+    }
+
+    _storageBackupTimer = Timer.periodic(
+      interval,
+      (_) => _runScheduledBackup(),
+    );
+  }
+
+  Future<void> _runScheduledBackup() async {
+    final settings = _storageSettings;
+    if (settings.backupDirectory.trim().isEmpty ||
+        settings.backupFrequency == AppBackupFrequency.manual) {
+      return;
+    }
+
+    try {
+      await widget.repository.backupToDirectory(settings.backupDirectory);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _storageSettings = _storageSettings.copyWith(
+          lastBackupAt: DateTime.now(),
+        );
+      });
+    } catch (_) {
+      // The manual backup button reports errors. Scheduled backups stay quiet.
+    }
+  }
+
+  Duration? _backupInterval(AppBackupFrequency frequency) {
+    switch (frequency) {
+      case AppBackupFrequency.manual:
+        return null;
+      case AppBackupFrequency.daily:
+        return const Duration(days: 1);
+      case AppBackupFrequency.weekly:
+        return const Duration(days: 7);
+      case AppBackupFrequency.monthly:
+        return const Duration(days: 30);
+    }
   }
 }
 
@@ -60,10 +218,38 @@ class DashboardHome extends StatefulWidget {
   const DashboardHome({
     super.key,
     required this.repository,
+    required this.language,
+    required this.onLanguageChanged,
+    required this.appearance,
+    required this.onAppearanceChanged,
+    required this.editorSettings,
+    required this.onEditorSettingsChanged,
+    required this.aiSettings,
+    required this.onAiSettingsChanged,
+    required this.agentSettings,
+    required this.onAgentSettingsChanged,
+    required this.dreamSettings,
+    required this.onDreamSettingsChanged,
+    required this.storageSettings,
+    required this.onStorageSettingsChanged,
     required this.onToggleTheme,
   });
 
   final DashboardRepository repository;
+  final AppLanguage language;
+  final ValueChanged<AppLanguage> onLanguageChanged;
+  final AppAppearance appearance;
+  final ValueChanged<AppAppearance> onAppearanceChanged;
+  final AppEditorSettings editorSettings;
+  final ValueChanged<AppEditorSettings> onEditorSettingsChanged;
+  final AppAiSettings aiSettings;
+  final ValueChanged<AppAiSettings> onAiSettingsChanged;
+  final AppAgentSettings agentSettings;
+  final ValueChanged<AppAgentSettings> onAgentSettingsChanged;
+  final AppDreamSettings dreamSettings;
+  final ValueChanged<AppDreamSettings> onDreamSettingsChanged;
+  final AppStorageSettings storageSettings;
+  final ValueChanged<AppStorageSettings> onStorageSettingsChanged;
   final VoidCallback onToggleTheme;
 
   @override
@@ -74,6 +260,26 @@ class _DashboardHomeState extends State<DashboardHome> {
   final _searchController = TextEditingController();
   DashboardViewState _state = DashboardViewState.loading();
   String? _error;
+  bool _showBookDeconstruction = false;
+  List<BookDeconstructionProject> _bookDeconstructionProjects = const [];
+  int? _activeBookDeconstructionProjectId;
+  bool _bookDeconstructionStopRequested = false;
+  Future<void>? _bookDeconstructionRun;
+
+  BookDeconstructionProject? get _currentBookDeconstructionProject {
+    if (_bookDeconstructionProjects.isEmpty) {
+      return null;
+    }
+    final activeId = _activeBookDeconstructionProjectId;
+    if (activeId != null) {
+      for (final project in _bookDeconstructionProjects) {
+        if (project.id == activeId) {
+          return project;
+        }
+      }
+    }
+    return _bookDeconstructionProjects.first;
+  }
 
   @override
   void initState() {
@@ -83,6 +289,7 @@ class _DashboardHomeState extends State<DashboardHome> {
 
   @override
   void dispose() {
+    _bookDeconstructionStopRequested = true;
     _searchController.dispose();
     widget.repository.close();
     super.dispose();
@@ -100,11 +307,16 @@ class _DashboardHomeState extends State<DashboardHome> {
       final data = await widget.repository.loadDashboard(
         searchQuery: _searchController.text,
       );
+      final bookProjects =
+          await widget.repository.loadBookDeconstructionProjects();
       if (!mounted) {
         return;
       }
       setState(() {
         _state = mapDashboardData(data);
+        _bookDeconstructionProjects = bookProjects;
+        _activeBookDeconstructionProjectId =
+            _nextActiveBookProjectId(bookProjects);
         _error = null;
       });
     } catch (error) {
@@ -117,18 +329,80 @@ class _DashboardHomeState extends State<DashboardHome> {
     }
   }
 
+  Future<void> _loadBookDeconstructionProjects({
+    bool recoverInterrupted = true,
+  }) async {
+    final projects = await widget.repository.loadBookDeconstructionProjects(
+      recoverInterrupted: recoverInterrupted,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _bookDeconstructionProjects = projects;
+      _activeBookDeconstructionProjectId = _nextActiveBookProjectId(projects);
+    });
+  }
+
+  int? _nextActiveBookProjectId(List<BookDeconstructionProject> projects) {
+    if (projects.isEmpty) {
+      return null;
+    }
+    final activeId = _activeBookDeconstructionProjectId;
+    if (activeId != null && projects.any((project) => project.id == activeId)) {
+      return activeId;
+    }
+    return projects.first.id;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final body = DashboardScreen(
-      state: _state,
-      actions: DashboardActions(
-        createNovel: _createNovel,
-        importNovel: _importNovel,
-        openProject: _openProject,
-        toggleTheme: widget.onToggleTheme,
-      ),
-      searchController: _searchController,
-      onSearchChanged: (_) => _loadDashboard(showLoading: false),
+    final body = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 260),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) {
+        final enteringBreakdown =
+            child.key == const ValueKey('book-deconstruction-screen');
+        final offset =
+            enteringBreakdown ? const Offset(1, 0) : const Offset(-1, 0);
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: offset,
+            end: Offset.zero,
+          ).animate(animation),
+          child: child,
+        );
+      },
+      child: _showBookDeconstruction
+          ? BookDeconstructionScreen(
+              key: const ValueKey('book-deconstruction-screen'),
+              today: _state.today,
+              currentProject: _currentBookDeconstructionProject,
+              projects: _bookDeconstructionProjects,
+              onBack: _closeBookBreakdown,
+              onToggleTheme: widget.onToggleTheme,
+              onOpenSettings: _openSettings,
+              onImportNovel: _importNovelForBookDeconstruction,
+              onCreateProject: _createBookDeconstructionProject,
+              onStartOrPause: _startOrPauseBookDeconstruction,
+              onSelectProject: _selectBookDeconstructionProject,
+              onDeleteProject: _deleteBookDeconstructionProject,
+            )
+          : DashboardScreen(
+              key: const ValueKey('dashboard-screen'),
+              state: _state,
+              actions: DashboardActions(
+                createNovel: _createNovel,
+                importNovel: _importNovel,
+                openProject: _openProject,
+                toggleTheme: widget.onToggleTheme,
+                openSettings: _openSettings,
+                openBookBreakdown: _openBookBreakdown,
+              ),
+              searchController: _searchController,
+              onSearchChanged: (_) => _loadDashboard(showLoading: false),
+            ),
     );
 
     if (_error == null) {
@@ -180,24 +454,406 @@ class _DashboardHomeState extends State<DashboardHome> {
 
   Future<void> _importNovel() async {
     final file = await openFile(
-      acceptedTypeGroups: _textFileTypes,
-      confirmButtonText: '导入',
+      acceptedTypeGroups: [
+        XTypeGroup(
+          label: context.l10n.text('file.novel'),
+          extensions: _textFileExtensions,
+        ),
+      ],
+      confirmButtonText: context.l10n.text('action.importNovel'),
     );
     if (file == null) {
       return;
     }
 
-    await widget.repository.importNovelFile(file.path);
-    _searchController.clear();
-    await _loadDashboard();
+    try {
+      await widget.repository.importNovelFile(file.path);
+      _searchController.clear();
+      await _loadDashboard();
+    } catch (error) {
+      _showSnackBar('导入失败：$error');
+    }
+  }
+
+  Future<void> _importNovelForBookDeconstruction() async {
+    final file = await openFile(
+      acceptedTypeGroups: [
+        XTypeGroup(
+          label: context.l10n.text('file.novel'),
+          extensions: _textFileExtensions,
+        ),
+      ],
+      confirmButtonText: context.l10n.text('action.importNovel'),
+    );
+    if (file == null) {
+      return;
+    }
+
+    try {
+      final novelId = await widget.repository.importNovelFile(file.path);
+      final current = _currentBookDeconstructionProject;
+      final projectId = current?.id ??
+          await widget.repository.createBookDeconstructionProject(
+            novelId: novelId,
+          );
+      if (current != null) {
+        await widget.repository.assignNovelToBookDeconstructionProject(
+          projectId: projectId,
+          novelId: novelId,
+        );
+      }
+      _activeBookDeconstructionProjectId = projectId;
+      _searchController.clear();
+      await _loadDashboard(showLoading: false);
+    } catch (error) {
+      _showSnackBar('导入失败：$error');
+    }
+  }
+
+  Future<void> _createBookDeconstructionProject() async {
+    final current = _currentBookDeconstructionProject;
+    if (current != null) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('新建拆书项目'),
+            content: Text('当前正在查看“${current.title}”。要切换到新的拆书项目吗？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('新建'),
+              ),
+            ],
+          );
+        },
+      );
+      if (confirmed != true) {
+        return;
+      }
+      if (current.isRunning) {
+        _bookDeconstructionStopRequested = true;
+        await widget.repository.setBookDeconstructionProjectStatus(
+          projectId: current.id,
+          status: BookDeconstructionProjectStatus.paused,
+          currentNodeId: current.currentNodeId,
+        );
+      }
+    }
+
+    final projectId = await widget.repository.createBookDeconstructionProject();
+    _activeBookDeconstructionProjectId = projectId;
+    await _loadBookDeconstructionProjects();
+  }
+
+  void _selectBookDeconstructionProject(int projectId) {
+    setState(() {
+      _activeBookDeconstructionProjectId = projectId;
+    });
+  }
+
+  Future<void> _deleteBookDeconstructionProject(int projectId) async {
+    BookDeconstructionProject? project;
+    for (final candidate in _bookDeconstructionProjects) {
+      if (candidate.id == projectId) {
+        project = candidate;
+        break;
+      }
+    }
+    if (project == null) {
+      return;
+    }
+    final targetTitle = project.title;
+    final targetIsRunning = project.isRunning;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('删除拆书项目'),
+          content: Text('确定删除“$targetTitle”吗？拆书进度和已生成数据都会移除。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+
+    if (targetIsRunning) {
+      _bookDeconstructionStopRequested = true;
+    }
+    await widget.repository.deleteBookDeconstructionProject(projectId);
+    if (_activeBookDeconstructionProjectId == projectId) {
+      _activeBookDeconstructionProjectId = null;
+    }
+    await _loadBookDeconstructionProjects(recoverInterrupted: false);
+  }
+
+  Future<void> _startOrPauseBookDeconstruction() async {
+    final project = _currentBookDeconstructionProject;
+    if (project == null || !project.hasNovel) {
+      _showSnackBar('请先导入或选择小说后再开始拆书。');
+      return;
+    }
+
+    if (project.isRunning) {
+      _bookDeconstructionStopRequested = true;
+      await widget.repository.setBookDeconstructionProjectStatus(
+        projectId: project.id,
+        status: BookDeconstructionProjectStatus.paused,
+        currentNodeId: project.currentNodeId,
+      );
+      await _loadBookDeconstructionProjects(recoverInterrupted: false);
+      return;
+    }
+
+    if (_bookDeconstructionRun != null) {
+      return;
+    }
+
+    _bookDeconstructionStopRequested = false;
+    _bookDeconstructionRun = _runBookDeconstruction(project.id).whenComplete(
+      () {
+        _bookDeconstructionRun = null;
+      },
+    );
+    await _bookDeconstructionRun;
+  }
+
+  Future<void> _runBookDeconstruction(int projectId) async {
+    await widget.repository.setBookDeconstructionProjectStatus(
+      projectId: projectId,
+      status: BookDeconstructionProjectStatus.running,
+    );
+    await _loadBookDeconstructionProjects(recoverInterrupted: false);
+
+    while (mounted && !_bookDeconstructionStopRequested) {
+      final projects = await widget.repository.loadBookDeconstructionProjects(
+        recoverInterrupted: false,
+      );
+      final project =
+          projects.where((project) => project.id == projectId).first;
+      if (!project.hasNovel) {
+        await widget.repository.setBookDeconstructionProjectStatus(
+          projectId: projectId,
+          status: BookDeconstructionProjectStatus.paused,
+          currentNodeId: project.currentNodeId,
+        );
+        _showSnackBar('请先导入或选择小说后再开始拆书。');
+        await _loadBookDeconstructionProjects(recoverInterrupted: false);
+        return;
+      }
+
+      final passed = {
+        for (final entry in project.nodeStatuses.entries)
+          if (entry.value == BookDeconstructionNodeStatus.passed) entry.key,
+      };
+      final pending = bookDeconstructionWorkflowNodes
+          .where((node) => !passed.contains(node.id))
+          .toList();
+      if (pending.isEmpty) {
+        await widget.repository.setBookDeconstructionProjectStatus(
+          projectId: projectId,
+          status: BookDeconstructionProjectStatus.completed,
+        );
+        await _loadBookDeconstructionProjects(recoverInterrupted: false);
+        return;
+      }
+
+      final ready = pending
+          .where((node) => node.dependsOn.every(passed.contains))
+          .toList();
+      if (ready.isEmpty) {
+        await widget.repository.setBookDeconstructionProjectStatus(
+          projectId: projectId,
+          status: BookDeconstructionProjectStatus.failed,
+          currentNodeId: pending.first.id,
+        );
+        _showSnackBar('拆书流程依赖异常，已暂停。');
+        await _loadBookDeconstructionProjects(recoverInterrupted: false);
+        return;
+      }
+
+      final node = ready.first;
+      await widget.repository.updateBookDeconstructionNodeStatus(
+        projectId: projectId,
+        nodeId: node.id,
+        status: BookDeconstructionNodeStatus.running,
+      );
+      await widget.repository.setBookDeconstructionProjectStatus(
+        projectId: projectId,
+        status: BookDeconstructionProjectStatus.running,
+        currentNodeId: node.id,
+      );
+      await _loadBookDeconstructionProjects(recoverInterrupted: false);
+      await Future<void>.delayed(const Duration(milliseconds: 260));
+
+      if (_bookDeconstructionStopRequested) {
+        await widget.repository.updateBookDeconstructionNodeStatus(
+          projectId: projectId,
+          nodeId: node.id,
+          status: BookDeconstructionNodeStatus.pending,
+          message: 'Paused before completion.',
+        );
+        break;
+      }
+
+      await widget.repository.recordBookDeconstructionNodeOutput(
+        projectId: projectId,
+        node: node,
+        content: _bookDeconstructionOutput(projectId, node),
+      );
+      await widget.repository.updateBookDeconstructionNodeStatus(
+        projectId: projectId,
+        nodeId: node.id,
+        status: BookDeconstructionNodeStatus.passed,
+      );
+      await _loadBookDeconstructionProjects(recoverInterrupted: false);
+    }
+
+    if (_bookDeconstructionStopRequested && mounted) {
+      final project = _currentBookDeconstructionProject;
+      await widget.repository.setBookDeconstructionProjectStatus(
+        projectId: projectId,
+        status: BookDeconstructionProjectStatus.paused,
+        currentNodeId: project?.currentNodeId,
+      );
+      await _loadBookDeconstructionProjects(recoverInterrupted: false);
+    }
+  }
+
+  String _bookDeconstructionOutput(
+    int projectId,
+    BookDeconstructionNode node,
+  ) {
+    return jsonEncode({
+      'project_id': projectId,
+      'node_id': node.id,
+      'node_name': node.name,
+      'status': 'passed',
+      'generated_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   void _openProject(NovelSummary novel) {
+    if (!widget.aiSettings.isReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(context.l10n.text('aiProvider.requiredToStart')),
+        ),
+      );
+      return;
+    }
+
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => ProjectDetailPage(novel: novel),
       ),
     );
+  }
+
+  void _openBookBreakdown() {
+    setState(() => _showBookDeconstruction = true);
+  }
+
+  void _closeBookBreakdown() {
+    setState(() => _showBookDeconstruction = false);
+  }
+
+  void _openSettings({bool showAgents = false}) {
+    showSettingsDialog(
+      context,
+      language: widget.language,
+      onLanguageChanged: widget.onLanguageChanged,
+      appearance: widget.appearance,
+      onAppearanceChanged: widget.onAppearanceChanged,
+      editorSettings: widget.editorSettings,
+      onEditorSettingsChanged: widget.onEditorSettingsChanged,
+      aiSettings: widget.aiSettings,
+      onAiSettingsChanged: widget.onAiSettingsChanged,
+      agentSettings: widget.agentSettings,
+      onAgentSettingsChanged: widget.onAgentSettingsChanged,
+      dreamSettings: widget.dreamSettings,
+      onDreamSettingsChanged: widget.onDreamSettingsChanged,
+      storageSettings: widget.storageSettings,
+      onStorageSettingsChanged: widget.onStorageSettingsChanged,
+      onBackupNow: widget.repository.backupToDirectory,
+      onRestoreBackup: (path) async {
+        await widget.repository.restoreFromBackup(path);
+        await _loadDashboard();
+      },
+      showAgents: showAgents,
+    );
+  }
+}
+
+class _AppearanceBackground extends StatelessWidget {
+  const _AppearanceBackground({
+    required this.appearance,
+    required this.child,
+  });
+
+  final AppAppearance appearance;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return DecoratedBox(
+      decoration: _backgroundDecoration(colors),
+      child: child,
+    );
+  }
+
+  Decoration _backgroundDecoration(AppPalette colors) {
+    switch (appearance.backgroundKind) {
+      case AppBackgroundKind.none:
+        return BoxDecoration(color: colors.background);
+      case AppBackgroundKind.solid:
+        return BoxDecoration(
+          color: appearance.solidBackground.color,
+        );
+      case AppBackgroundKind.builtIn:
+        return BoxDecoration(
+          gradient: appearance.builtInBackground.gradient,
+        );
+      case AppBackgroundKind.custom:
+        final path = appearance.customBackgroundPath;
+        if (path == null || !File(path).existsSync()) {
+          return BoxDecoration(color: colors.background);
+        }
+        return BoxDecoration(
+          color: colors.background,
+          image: DecorationImage(
+            image: FileImage(File(path)),
+            fit: appearance.backgroundFit.boxFit,
+            repeat: appearance.backgroundFit == AppBackgroundFit.tile
+                ? ImageRepeat.repeat
+                : ImageRepeat.noRepeat,
+          ),
+        );
+    }
   }
 }
 
@@ -211,6 +867,9 @@ class ProjectDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final editorSettings = AppEditorSettingsScope.of(context);
+
     return Scaffold(
       appBar: AppBar(title: Text(novel.title)),
       body: Center(
@@ -226,20 +885,49 @@ class ProjectDetailPage extends StatelessWidget {
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 12),
-                Text(novel.summary.isEmpty ? '暂无简介' : novel.summary),
+                Text(
+                    novel.summary.isEmpty
+                        ? l10n.text('detail.noSummary')
+                        : novel.summary,
+                    style: TextStyle(
+                      fontFamily: editorSettings.fontFamily,
+                      fontSize: editorSettings.fontSize,
+                      letterSpacing: editorSettings.letterSpacing,
+                      height: editorSettings.lineHeight,
+                    )),
                 const SizedBox(height: 24),
-                Text('字数：${novel.wordCount}'),
+                Text(l10n.novelDetailLabel(
+                  l10n.text('detail.words'),
+                  novel.wordCount.toString(),
+                )),
                 const SizedBox(height: 8),
-                Text('分类：${novel.category.isEmpty ? '未设置分类' : novel.category}'),
+                Text(l10n.novelDetailLabel(
+                  l10n.text('detail.category'),
+                  novel.category.isEmpty
+                      ? l10n.unsetField('category')
+                      : novel.category,
+                )),
                 const SizedBox(height: 8),
-                Text(
-                    '作品类型：${novel.workType.isEmpty ? '未设置类型' : novel.workType}'),
+                Text(l10n.novelDetailLabel(
+                  l10n.text('detail.workType'),
+                  novel.workType.isEmpty
+                      ? l10n.unsetField('workType')
+                      : novel.workType,
+                )),
                 const SizedBox(height: 8),
-                Text(
-                  '标签：${novel.tags.isEmpty ? '未设置标签' : novel.tags.join('、')}',
-                ),
+                Text(l10n.novelDetailLabel(
+                  l10n.text('detail.tags'),
+                  novel.tags.isEmpty
+                      ? l10n.unsetField('tags')
+                      : novel.tags.join('、'),
+                )),
                 const SizedBox(height: 8),
-                Text("状态：${novel.status.isEmpty ? '未设置状态' : novel.status}"),
+                Text(l10n.novelDetailLabel(
+                  l10n.text('detail.status'),
+                  novel.status.isEmpty
+                      ? l10n.unsetField('status')
+                      : novel.status,
+                )),
               ],
             ),
           ),

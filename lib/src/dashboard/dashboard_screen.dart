@@ -1,8 +1,12 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../app/app_appearance.dart';
+import '../app/app_localizations.dart';
 import '../app/app_theme.dart';
+import '../book_lab/book_deconstruction_workflow.dart';
 import 'dashboard_models.dart';
 
 class DashboardActions {
@@ -11,14 +15,16 @@ class DashboardActions {
     required this.importNovel,
     required this.openProject,
     required this.toggleTheme,
-    this.openAiConfig,
+    this.openSettings,
+    this.openBookBreakdown,
   });
 
   final VoidCallback createNovel;
   final VoidCallback importNovel;
   final ValueChanged<NovelSummary> openProject;
   final VoidCallback toggleTheme;
-  final VoidCallback? openAiConfig;
+  final VoidCallback? openSettings;
+  final VoidCallback? openBookBreakdown;
 }
 
 class DashboardScreen extends StatelessWidget {
@@ -38,17 +44,22 @@ class DashboardScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final appearance = AppAppearanceScope.of(context);
 
     return Scaffold(
-      backgroundColor: colors.background,
+      backgroundColor: appearance.backgroundKind == AppBackgroundKind.none
+          ? colors.background
+          : Colors.transparent,
       body: Column(
         children: [
           _TopBar(
             onToggleTheme: actions.toggleTheme,
-            onOpenAiConfig: actions.openAiConfig,
+            onOpenSettings: actions.openSettings,
+            onOpenBookBreakdown: actions.openBookBreakdown,
           ),
           Expanded(
             child: SingleChildScrollView(
+              key: const PageStorageKey<String>('book-deconstruction-scroll'),
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 1224),
@@ -58,7 +69,7 @@ class DashboardScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '欢迎回来',
+                          context.l10n.text('dashboard.welcome'),
                           style: Theme.of(context)
                               .textTheme
                               .headlineSmall
@@ -69,7 +80,7 @@ class DashboardScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          _formatDate(state.today),
+                          context.l10n.date(state.today),
                           style: Theme.of(context)
                               .textTheme
                               .bodyMedium
@@ -126,21 +137,157 @@ class DashboardScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  static String _formatDate(DateTime date) {
-    const weekdays = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
-    return '${date.year}年${date.month}月${date.day}日 · ${weekdays[date.weekday - 1]}';
+class BookDeconstructionScreen extends StatelessWidget {
+  const BookDeconstructionScreen({
+    super.key,
+    required this.today,
+    this.currentProject,
+    this.projects = const [],
+    required this.onBack,
+    required this.onToggleTheme,
+    this.onOpenSettings,
+    this.onImportNovel,
+    this.onCreateProject,
+    this.onStartOrPause,
+    this.onSelectProject,
+    this.onDeleteProject,
+  });
+
+  final DateTime today;
+  final BookDeconstructionProject? currentProject;
+  final List<BookDeconstructionProject> projects;
+  final VoidCallback onBack;
+  final VoidCallback onToggleTheme;
+  final VoidCallback? onOpenSettings;
+  final VoidCallback? onImportNovel;
+  final VoidCallback? onCreateProject;
+  final VoidCallback? onStartOrPause;
+  final ValueChanged<int>? onSelectProject;
+  final ValueChanged<int>? onDeleteProject;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    final appearance = AppAppearanceScope.of(context);
+    final nodeStatuses = currentProject?.nodeStatuses ?? const {};
+
+    return Scaffold(
+      backgroundColor: appearance.backgroundKind == AppBackgroundKind.none
+          ? colors.background
+          : Colors.transparent,
+      body: Column(
+        children: [
+          _TopBar(
+            onToggleTheme: onToggleTheme,
+            onOpenSettings: onOpenSettings,
+            onBack: onBack,
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1224),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 34, 24, 48),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '拆书工作台',
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(
+                                color: colors.text,
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          context.l10n.date(today),
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: colors.muted),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          '导入一本小说，拆解结构、人物、伏笔与文风指纹',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: colors.muted),
+                        ),
+                        const SizedBox(height: 22),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final wide = constraints.maxWidth >= 920;
+                            final primary = _BookBreakdownStartCard(
+                              onImportNovel: onImportNovel,
+                              onStartOrPause: onStartOrPause,
+                              project: currentProject,
+                              nodeStatuses: nodeStatuses,
+                            );
+                            final stats = _BookBreakdownStatsColumn(
+                              project: currentProject,
+                            );
+
+                            if (!wide) {
+                              return Column(
+                                children: [
+                                  primary,
+                                  const SizedBox(height: 16),
+                                  stats,
+                                ],
+                              );
+                            }
+
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(flex: 2, child: primary),
+                                const SizedBox(width: 24),
+                                Expanded(child: stats),
+                              ],
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        _BookBreakdownProjectsSection(
+                          projects: projects,
+                          currentProject: currentProject,
+                          onImportNovel: onImportNovel,
+                          onCreateProject: onCreateProject,
+                          onSelectProject: onSelectProject,
+                          onDeleteProject: onDeleteProject,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.onToggleTheme,
-    this.onOpenAiConfig,
+    this.onOpenSettings,
+    this.onOpenBookBreakdown,
+    this.onBack,
   });
 
   final VoidCallback onToggleTheme;
-  final VoidCallback? onOpenAiConfig;
+  final VoidCallback? onOpenSettings;
+  final VoidCallback? onOpenBookBreakdown;
+  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -170,8 +317,8 @@ class _TopBar extends StatelessWidget {
                     color: colors.brand,
                   ),
                   alignment: Alignment.center,
-                  child: const Text(
-                    '墨',
+                  child: Text(
+                    context.l10n.text('brand.mark'),
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
@@ -184,7 +331,7 @@ class _TopBar extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'AI 小说工坊',
+                      context.l10n.text('app.title'),
                       style: TextStyle(
                         color: colors.text,
                         fontSize: 15,
@@ -193,7 +340,7 @@ class _TopBar extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '智能小说创作平台',
+                      context.l10n.text('app.subtitle'),
                       style: TextStyle(
                         color: colors.muted,
                         fontSize: 12,
@@ -203,22 +350,1244 @@ class _TopBar extends StatelessWidget {
                 ),
                 const Spacer(),
                 IconButton(
-                  tooltip: isDarkMode ? '切换浅色模式' : '切换深色模式',
+                  tooltip: isDarkMode
+                      ? context.l10n.text('theme.light')
+                      : context.l10n.text('theme.dark'),
                   onPressed: onToggleTheme,
                   icon: Icon(isDarkMode ? Icons.light_mode : Icons.dark_mode),
                 ),
-                if (onOpenAiConfig != null) ...[
+                if (onOpenSettings != null) ...[
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
-                    onPressed: onOpenAiConfig,
-                    icon: const Icon(Icons.auto_awesome, size: 18),
-                    label: const Text('AI 配置'),
+                    onPressed: onOpenSettings,
+                    icon: const Icon(Icons.settings_outlined, size: 18),
+                    label: Text(context.l10n.text('settings')),
+                  ),
+                ],
+                if (onOpenBookBreakdown != null) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: onOpenBookBreakdown,
+                    icon: const Icon(Icons.auto_stories_outlined, size: 18),
+                    label: Text(context.l10n.text('action.bookBreakdown')),
+                  ),
+                ],
+                if (onBack != null) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: context.l10n.isEnglish ? 'Back' : '返回',
+                    onPressed: onBack,
+                    icon: const Icon(Icons.arrow_back),
                   ),
                 ],
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _BookBreakdownStartCard extends StatelessWidget {
+  const _BookBreakdownStartCard({
+    this.onImportNovel,
+    this.onStartOrPause,
+    this.project,
+    required this.nodeStatuses,
+  });
+
+  final VoidCallback? onImportNovel;
+  final VoidCallback? onStartOrPause;
+  final BookDeconstructionProject? project;
+  final Map<String, BookDeconstructionNodeStatus> nodeStatuses;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    final title = project?.novelTitle ?? '未选择小说';
+    final subtitle = project?.hasNovel ?? false
+        ? '拆书项目：${project!.title}'
+        : '导入 TXT / EPUB 后开始生成拆书资产。';
+    final running = project?.isRunning ?? false;
+
+    return _CardShell(
+      minHeight: 390,
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '开始拆书',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: colors.text,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 128,
+                  height: 188,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: colors.line),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        colors.text,
+                        colors.brand.withValues(alpha: 0.36),
+                        colors.card,
+                      ],
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.auto_stories_outlined,
+                    color: colors.card,
+                    size: 40,
+                  ),
+                ),
+                const SizedBox(width: 28),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              color: colors.text,
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        subtitle,
+                        style: TextStyle(color: colors.muted),
+                      ),
+                      const SizedBox(height: 24),
+                      Text(
+                        '分析目标',
+                        style: TextStyle(
+                          color: colors.text,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          for (final target in _bookBreakdownTargets)
+                            _BookBreakdownTargetChip(
+                              icon: target.icon,
+                              label: target.label,
+                              status: _bookBreakdownStatusForNodes(
+                                nodeStatuses,
+                                target.nodeIds,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 26),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 16,
+              runSpacing: 14,
+              children: [
+                _PrimaryButton(
+                  icon: running ? Icons.pause : Icons.play_arrow,
+                  label: running ? '暂停拆书' : '开始拆书',
+                  onPressed: onStartOrPause ?? () {},
+                ),
+                _SecondaryButton(
+                  icon: Icons.upload_file,
+                  label: context.l10n.text('action.importNovel'),
+                  onPressed: onImportNovel ?? () {},
+                ),
+                const SizedBox(width: 32),
+                _BookBreakdownPipeline(nodeStatuses: nodeStatuses),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BookBreakdownTargetData {
+  const _BookBreakdownTargetData({
+    required this.icon,
+    required this.label,
+    required this.nodeIds,
+  });
+
+  final IconData icon;
+  final String label;
+  final List<String> nodeIds;
+}
+
+class _BookBreakdownPipelineStepData {
+  const _BookBreakdownPipelineStepData({
+    required this.icon,
+    required this.label,
+    required this.nodeIds,
+  });
+
+  final IconData icon;
+  final String label;
+  final List<String> nodeIds;
+}
+
+const _bookBreakdownTargets = [
+  _BookBreakdownTargetData(
+    icon: Icons.article_outlined,
+    label: '章节拆解',
+    nodeIds: ['book_chapter_content'],
+  ),
+  _BookBreakdownTargetData(
+    icon: Icons.travel_explore,
+    label: '全书总览',
+    nodeIds: ['book_overview'],
+  ),
+  _BookBreakdownTargetData(
+    icon: Icons.account_tree_outlined,
+    label: '情节结构',
+    nodeIds: ['book_plot_structure'],
+  ),
+  _BookBreakdownTargetData(
+    icon: Icons.groups_outlined,
+    label: '人物关系',
+    nodeIds: ['book_relationships'],
+  ),
+  _BookBreakdownTargetData(
+    icon: Icons.psychology_alt_outlined,
+    label: '伏笔悬念',
+    nodeIds: ['foreshadowing_initial', 'foreshadowing_review'],
+  ),
+  _BookBreakdownTargetData(
+    icon: Icons.fingerprint,
+    label: '文风指纹',
+    nodeIds: [
+      'style_chapter_statistics',
+      'style_global',
+      'style_character_voice',
+      'style_scene_voice',
+    ],
+  ),
+  _BookBreakdownTargetData(
+    icon: Icons.integration_instructions_outlined,
+    label: 'Skill 编译',
+    nodeIds: ['book_skill_compile'],
+  ),
+];
+
+const _bookBreakdownPipelineSteps = [
+  _BookBreakdownPipelineStepData(
+    icon: Icons.cleaning_services_outlined,
+    label: '文本清洗',
+    nodeIds: ['book_text_cleaning'],
+  ),
+  _BookBreakdownPipelineStepData(
+    icon: Icons.segment_outlined,
+    label: '分章',
+    nodeIds: ['gate_1_text_cleaned'],
+  ),
+  _BookBreakdownPipelineStepData(
+    icon: Icons.description_outlined,
+    label: '拆解',
+    nodeIds: [
+      'book_chapter_content',
+      'style_chapter_statistics',
+      'base_index_normalization',
+      'book_plot_structure',
+      'book_relationships',
+      'foreshadowing_initial',
+      'style_global',
+      'book_business_mechanism',
+      'style_character_voice',
+      'style_scene_voice',
+      'foreshadowing_review',
+      'gate_4_multidimensional_analysis',
+    ],
+  ),
+  _BookBreakdownPipelineStepData(
+    icon: Icons.summarize_outlined,
+    label: '汇总',
+    nodeIds: ['book_overview', 'book_template_distillation'],
+  ),
+  _BookBreakdownPipelineStepData(
+    icon: Icons.ios_share_outlined,
+    label: 'Skill 编译',
+    nodeIds: ['book_skill_compile', 'book_quality_check'],
+  ),
+];
+
+BookDeconstructionNodeStatus _bookBreakdownStatusForNodes(
+  Map<String, BookDeconstructionNodeStatus> statuses,
+  List<String> nodeIds,
+) {
+  final values = [
+    for (final id in nodeIds)
+      if (statuses[id] != null) statuses[id]!,
+  ];
+
+  if (values.isEmpty) {
+    return BookDeconstructionNodeStatus.pending;
+  }
+  if (values.any((status) => status == BookDeconstructionNodeStatus.running)) {
+    return BookDeconstructionNodeStatus.running;
+  }
+  if (values.any((status) => status == BookDeconstructionNodeStatus.failed)) {
+    return BookDeconstructionNodeStatus.failed;
+  }
+  if (values.length == nodeIds.length &&
+      values.every((status) => status == BookDeconstructionNodeStatus.passed)) {
+    return BookDeconstructionNodeStatus.passed;
+  }
+  if (values.length == nodeIds.length &&
+      values.every(
+        (status) => status == BookDeconstructionNodeStatus.skipped,
+      )) {
+    return BookDeconstructionNodeStatus.skipped;
+  }
+  return BookDeconstructionNodeStatus.pending;
+}
+
+class _BookBreakdownTargetChip extends StatelessWidget {
+  const _BookBreakdownTargetChip({
+    required this.icon,
+    required this.label,
+    required this.status,
+  });
+
+  final IconData icon;
+  final String label;
+  final BookDeconstructionNodeStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return Container(
+      width: 142,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.line),
+        color: colors.card,
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: colors.muted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: colors.muted, fontSize: 13),
+            ),
+          ),
+          _BookBreakdownStatusIcon(
+            key: ValueKey('book-target-status-$label-${status.name}'),
+            status: status,
+            size: 16,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BookBreakdownStatusIcon extends StatelessWidget {
+  const _BookBreakdownStatusIcon({
+    super.key,
+    required this.status,
+    required this.size,
+  });
+
+  final BookDeconstructionNodeStatus status;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    final errorColor = Theme.of(context).colorScheme.error;
+
+    return switch (status) {
+      BookDeconstructionNodeStatus.running => _RunningStatusIcon(
+          color: colors.text,
+          size: size,
+        ),
+      BookDeconstructionNodeStatus.passed => Icon(
+          Icons.check_circle,
+          size: size,
+          color: colors.text,
+        ),
+      BookDeconstructionNodeStatus.failed => Icon(
+          Icons.error,
+          size: size,
+          color: errorColor,
+        ),
+      BookDeconstructionNodeStatus.skipped => Icon(
+          Icons.remove_circle_outline,
+          size: size,
+          color: colors.muted,
+        ),
+      BookDeconstructionNodeStatus.pending => Icon(
+          Icons.radio_button_unchecked,
+          size: size,
+          color: colors.muted,
+        ),
+    };
+  }
+}
+
+class _RunningStatusIcon extends StatelessWidget {
+  const _RunningStatusIcon({
+    required this.color,
+    required this.size,
+  });
+
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: size,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        valueColor: AlwaysStoppedAnimation<Color>(color),
+      ),
+    );
+  }
+}
+
+class _BookBreakdownPipeline extends StatelessWidget {
+  const _BookBreakdownPipeline({
+    required this.nodeStatuses,
+  });
+
+  final Map<String, BookDeconstructionNodeStatus> nodeStatuses;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 10,
+      runSpacing: 8,
+      children: [
+        for (var i = 0; i < _bookBreakdownPipelineSteps.length; i++) ...[
+          _PipelineStep(
+            icon: _bookBreakdownPipelineSteps[i].icon,
+            label: _bookBreakdownPipelineSteps[i].label,
+            status: _bookBreakdownStatusForNodes(
+              nodeStatuses,
+              _bookBreakdownPipelineSteps[i].nodeIds,
+            ),
+          ),
+          if (i != _bookBreakdownPipelineSteps.length - 1)
+            Icon(Icons.arrow_forward, size: 16, color: colors.muted),
+        ],
+      ],
+    );
+  }
+}
+
+class _PipelineStep extends StatelessWidget {
+  const _PipelineStep({
+    required this.icon,
+    required this.label,
+    required this.status,
+  });
+
+  final IconData icon;
+  final String label;
+  final BookDeconstructionNodeStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    final errorColor = Theme.of(context).colorScheme.error;
+    final running = status == BookDeconstructionNodeStatus.running;
+    final failed = status == BookDeconstructionNodeStatus.failed;
+    final circleColor = running ? colors.text : colors.card;
+    final statusColor = failed ? errorColor : colors.muted;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          key: ValueKey('book-pipeline-status-$label-${status.name}'),
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: circleColor,
+            border: Border.all(
+              color: running
+                  ? colors.text
+                  : failed
+                      ? errorColor
+                      : colors.line,
+            ),
+          ),
+          child: Center(
+            child: running
+                ? _RunningStatusIcon(color: colors.card, size: 18)
+                : Icon(icon, size: 18, color: statusColor),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          label,
+          style: TextStyle(
+            color: running ? colors.text : statusColor,
+            fontSize: 12,
+            fontWeight: running ? FontWeight.w700 : FontWeight.w400,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BookBreakdownStatsColumn extends StatelessWidget {
+  const _BookBreakdownStatsColumn({this.project});
+
+  final BookDeconstructionProject? project;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    final progress = project?.progress ?? 0;
+
+    return Column(
+      children: [
+        _BookBreakdownStatCard(
+          title: project?.isRunning ?? false ? '当前任务' : '当前进度',
+          value: '${(progress * 100).round()}%',
+          icon: Icons.track_changes,
+          child: LinearProgressIndicator(
+            value: progress,
+            backgroundColor: colors.line,
+            color: colors.text,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _BookBreakdownStatCard(
+          title: '已拆章节',
+          value: (project?.chapterCount ?? 0).toString(),
+          icon: Icons.snippet_folder_outlined,
+          iconColor: colors.brand,
+        ),
+        const SizedBox(height: 12),
+        _BookBreakdownStatCard(
+          title: '提取角色',
+          value: (project?.characterCount ?? 0).toString(),
+          icon: Icons.group_outlined,
+          iconColor: colors.success,
+        ),
+        const SizedBox(height: 12),
+        _BookBreakdownStatCard(
+          title: '风格资产',
+          value: (project?.styleAssetCount ?? 0).toString(),
+          icon: Icons.fingerprint,
+          iconColor: colors.brand,
+        ),
+      ],
+    );
+  }
+}
+
+class _BookBreakdownStatCard extends StatelessWidget {
+  const _BookBreakdownStatCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+    this.iconColor,
+    this.child,
+  });
+
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color? iconColor;
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return _CardShell(
+      minHeight: 92,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Icon(icon, color: iconColor ?? colors.muted, size: 20),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              value,
+              style: TextStyle(
+                color: colors.text,
+                fontSize: 25,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (child != null) ...[
+              const SizedBox(height: 10),
+              child!,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BookBreakdownMetricsStrip extends StatelessWidget {
+  const _BookBreakdownMetricsStrip({this.project});
+
+  final BookDeconstructionProject? project;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CardShell(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 680;
+            final metrics = const [
+              _CompactMetricData(
+                icon: Icons.article_outlined,
+                label: '章节文件',
+              ),
+              _CompactMetricData(
+                icon: Icons.groups_outlined,
+                label: '人物档案',
+              ),
+              _CompactMetricData(
+                icon: Icons.checklist_rtl,
+                label: '伏笔条目',
+              ),
+              _CompactMetricData(
+                icon: Icons.fingerprint,
+                label: '风格指纹',
+              ),
+            ];
+            final widgets = [
+              _CompactMetric(
+                icon: metrics[0].icon,
+                label: metrics[0].label,
+                value: (project?.chapterCount ?? 0).toString(),
+              ),
+              _CompactMetric(
+                icon: metrics[1].icon,
+                label: metrics[1].label,
+                value: (project?.characterCount ?? 0).toString(),
+              ),
+              _CompactMetric(
+                icon: metrics[2].icon,
+                label: metrics[2].label,
+                value: (project?.foreshadowingCount ?? 0).toString(),
+              ),
+              _CompactMetric(
+                icon: metrics[3].icon,
+                label: metrics[3].label,
+                value: (project?.styleAssetCount ?? 0).toString(),
+              ),
+            ];
+
+            if (compact) {
+              return Wrap(spacing: 24, runSpacing: 12, children: widgets);
+            }
+
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: widgets,
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactMetricData {
+  const _CompactMetricData({
+    required this.icon,
+    required this.label,
+  });
+
+  final IconData icon;
+  final String label;
+}
+
+class _CompactMetric extends StatelessWidget {
+  const _CompactMetric({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 22, color: colors.muted),
+        const SizedBox(width: 10),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: TextStyle(color: colors.muted, fontSize: 12)),
+            Text(
+              value,
+              style: TextStyle(
+                color: colors.text,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+const _bookProjectTableHorizontalPadding = 28.0;
+const _bookProjectTableMinWidth = 1108.0;
+const _bookProjectNameMinWidth = 260.0;
+const _bookProjectProgressWidth = 230.0;
+const _bookProjectStatusWidth = 170.0;
+const _bookProjectUpdatedWidth = 180.0;
+const _bookProjectActionWidth = 150.0;
+const _bookProjectMenuWidth = 44.0;
+
+double _bookProjectNameWidth(double tableWidth) {
+  const fixedWidth = _bookProjectProgressWidth +
+      _bookProjectStatusWidth +
+      _bookProjectUpdatedWidth +
+      _bookProjectActionWidth +
+      _bookProjectMenuWidth +
+      (_bookProjectTableHorizontalPadding * 2);
+
+  return math.max(_bookProjectNameMinWidth, tableWidth - fixedWidth);
+}
+
+class _BookBreakdownProjectsSection extends StatelessWidget {
+  const _BookBreakdownProjectsSection({
+    required this.projects,
+    this.currentProject,
+    this.onImportNovel,
+    this.onCreateProject,
+    this.onSelectProject,
+    this.onDeleteProject,
+  });
+
+  final List<BookDeconstructionProject> projects;
+  final BookDeconstructionProject? currentProject;
+  final VoidCallback? onImportNovel;
+  final VoidCallback? onCreateProject;
+  final ValueChanged<int>? onSelectProject;
+  final ValueChanged<int>? onDeleteProject;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final title = Text(
+              '拆书项目',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: colors.text,
+                    fontWeight: FontWeight.w700,
+                  ),
+            );
+            final actions = Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _SecondaryButton(
+                  icon: Icons.upload_file,
+                  label: context.l10n.text('action.importNovel'),
+                  onPressed: onImportNovel ?? () {},
+                ),
+                _PrimaryButton(
+                  icon: Icons.add,
+                  label: '新建拆书',
+                  onPressed: onCreateProject ?? () {},
+                ),
+              ],
+            );
+
+            if (constraints.maxWidth < 920) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      title,
+                      const Spacer(),
+                      actions,
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _BookBreakdownMetricsStrip(project: currentProject),
+                ],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(width: 126, child: title),
+                Expanded(
+                  child: _BookBreakdownMetricsStrip(project: currentProject),
+                ),
+                const SizedBox(width: 18),
+                actions,
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        _CardShell(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final tableWidth =
+                  math.max(constraints.maxWidth, _bookProjectTableMinWidth);
+
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: tableWidth,
+                  child: Column(
+                    children: [
+                      _BookBreakdownProjectTableHeader(tableWidth: tableWidth),
+                      Divider(height: 1, color: colors.line),
+                      if (projects.isEmpty)
+                        SizedBox(
+                          height: 126,
+                          child: Center(
+                            child: Text(
+                              '暂无拆书项目',
+                              style: TextStyle(color: colors.muted),
+                            ),
+                          ),
+                        )
+                      else
+                        for (final project in projects) ...[
+                          _BookBreakdownProjectRow(
+                            project: project,
+                            isCurrent: project.id == currentProject?.id,
+                            tableWidth: tableWidth,
+                            onSelectProject: onSelectProject,
+                            onDeleteProject: onDeleteProject,
+                          ),
+                          if (project != projects.last)
+                            Divider(height: 1, color: colors.line),
+                        ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BookBreakdownProjectTableHeader extends StatelessWidget {
+  const _BookBreakdownProjectTableHeader({required this.tableWidth});
+
+  final double tableWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: _bookProjectTableHorizontalPadding,
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: _bookProjectNameWidth(tableWidth),
+              child: const _TableHeaderText('项目名称'),
+            ),
+            const SizedBox(
+              width: _bookProjectProgressWidth,
+              child: _TableHeaderText('进度'),
+            ),
+            const SizedBox(
+              width: _bookProjectStatusWidth,
+              child: _TableHeaderText('状态'),
+            ),
+            const SizedBox(
+              width: _bookProjectUpdatedWidth,
+              child: _TableHeaderText('更新时间'),
+            ),
+            const SizedBox(
+              width: _bookProjectActionWidth,
+              child: _TableHeaderText('操作'),
+            ),
+            const SizedBox(width: _bookProjectMenuWidth),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BookBreakdownProjectRow extends StatelessWidget {
+  const _BookBreakdownProjectRow({
+    required this.project,
+    required this.isCurrent,
+    required this.tableWidth,
+    this.onSelectProject,
+    this.onDeleteProject,
+  });
+
+  final BookDeconstructionProject project;
+  final bool isCurrent;
+  final double tableWidth;
+  final ValueChanged<int>? onSelectProject;
+  final ValueChanged<int>? onDeleteProject;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = (project.progress * 100).round();
+    final action = _projectAction(project.status, isCurrent);
+
+    return SizedBox(
+      height: 56,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: _bookProjectTableHorizontalPadding,
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: _bookProjectNameWidth(tableWidth),
+              child: Text(
+                project.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppPalette.of(context).text,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            SizedBox(
+              width: _bookProjectProgressWidth,
+              child: _BookProjectProgress(
+                progress: project.progress,
+                label: '$progress%',
+              ),
+            ),
+            SizedBox(
+              width: _bookProjectStatusWidth,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _BookProjectStatusPill(status: project.status),
+              ),
+            ),
+            SizedBox(
+              width: _bookProjectUpdatedWidth,
+              child: Text(
+                _relativeTime(project.updatedAt),
+                style: TextStyle(color: AppPalette.of(context).muted),
+              ),
+            ),
+            SizedBox(
+              width: _bookProjectActionWidth,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _BookProjectActionButton(
+                  icon: action.$2,
+                  label: action.$1,
+                  onPressed: () => onSelectProject?.call(project.id),
+                ),
+              ),
+            ),
+            SizedBox(
+              width: _bookProjectMenuWidth,
+              child: _BookProjectMoreMenu(
+                isCurrent: isCurrent,
+                onSelect: () => onSelectProject?.call(project.id),
+                onDelete: () => onDeleteProject?.call(project.id),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BookProjectProgress extends StatelessWidget {
+  const _BookProjectProgress({
+    required this.progress,
+    required this.label,
+  });
+
+  final double progress;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    final value = progress.clamp(0.0, 1.0).toDouble();
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 52,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: colors.text,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 148,
+          child: LinearProgressIndicator(
+            value: value,
+            minHeight: 6,
+            backgroundColor: colors.line,
+            color: colors.text,
+            borderRadius: BorderRadius.circular(999),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BookProjectMoreMenu extends StatelessWidget {
+  const _BookProjectMoreMenu({
+    required this.isCurrent,
+    required this.onSelect,
+    required this.onDelete,
+  });
+
+  final bool isCurrent;
+  final VoidCallback onSelect;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return PopupMenuButton<_BookProjectMenuAction>(
+      tooltip: '更多',
+      icon: Icon(Icons.more_horiz, color: colors.muted),
+      onSelected: (action) {
+        switch (action) {
+          case _BookProjectMenuAction.select:
+            onSelect();
+          case _BookProjectMenuAction.delete:
+            onDelete();
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: _BookProjectMenuAction.select,
+          enabled: !isCurrent,
+          child: const Text('设为当前项目'),
+        ),
+        const PopupMenuItem(
+          value: _BookProjectMenuAction.delete,
+          child: Text('删除项目'),
+        ),
+      ],
+    );
+  }
+}
+
+enum _BookProjectMenuAction { select, delete }
+
+(String, IconData) _projectAction(
+  BookDeconstructionProjectStatus status,
+  bool isCurrent,
+) {
+  if (isCurrent) {
+    return switch (status) {
+      BookDeconstructionProjectStatus.completed => ('查看报告', Icons.article),
+      BookDeconstructionProjectStatus.paused => ('继续拆书', Icons.play_arrow),
+      BookDeconstructionProjectStatus.failed => ('查看详情', Icons.error_outline),
+      _ => ('进入项目', Icons.open_in_new),
+    };
+  }
+
+  return switch (status) {
+    BookDeconstructionProjectStatus.completed => ('查看报告', Icons.article),
+    BookDeconstructionProjectStatus.running => ('进入项目', Icons.open_in_new),
+    BookDeconstructionProjectStatus.paused => ('继续拆书', Icons.play_arrow),
+    BookDeconstructionProjectStatus.failed => ('查看详情', Icons.error_outline),
+    BookDeconstructionProjectStatus.draft => ('进入项目', Icons.open_in_new),
+  };
+}
+
+class _BookProjectStatusPill extends StatelessWidget {
+  const _BookProjectStatusPill({required this.status});
+
+  final BookDeconstructionProjectStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final (label, color, background) = switch (status) {
+      BookDeconstructionProjectStatus.draft => (
+          '待开始',
+          const Color(0xFF6B7280),
+          const Color(0xFFF3F4F6),
+        ),
+      BookDeconstructionProjectStatus.running => (
+          '进行中',
+          const Color(0xFF2563EB),
+          const Color(0xFFEAF2FF),
+        ),
+      BookDeconstructionProjectStatus.paused => (
+          '排队中',
+          const Color(0xFFD97706),
+          const Color(0xFFFFF3DC),
+        ),
+      BookDeconstructionProjectStatus.completed => (
+          '已完成',
+          const Color(0xFF16A34A),
+          const Color(0xFFE7F7ED),
+        ),
+      BookDeconstructionProjectStatus.failed => (
+          '失败',
+          Theme.of(context).colorScheme.error,
+          Theme.of(context).colorScheme.errorContainer,
+        ),
+    };
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: isDark ? color.withValues(alpha: 0.18) : background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BookProjectActionButton extends StatelessWidget {
+  const _BookProjectActionButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return SizedBox(
+      height: 34,
+      child: OutlinedButton.icon(
+        icon: Icon(icon, size: 16),
+        label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: colors.text,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          minimumSize: const Size(0, 34),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+          side: BorderSide(color: colors.line),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          textStyle: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TableHeaderText extends StatelessWidget {
+  const _TableHeaderText(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+
+    return Text(
+      text,
+      style: TextStyle(
+        color: colors.muted,
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
       ),
     );
   }
@@ -250,10 +1619,10 @@ class _PrimaryWorkCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              _StatusLabel(text: _statusText()),
+              _StatusLabel(text: _statusText(context)),
               const SizedBox(height: 18),
               Text(
-                _titleText(),
+                _titleText(context),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -263,7 +1632,7 @@ class _PrimaryWorkCard extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                _metaText(),
+                _metaText(context),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: colors.muted,
                     ),
@@ -276,24 +1645,24 @@ class _PrimaryWorkCard extends StatelessWidget {
                   if (state.mode == DashboardMode.firstUse) ...[
                     _PrimaryButton(
                       icon: Icons.add,
-                      label: '新建小说',
+                      label: context.l10n.text('action.newNovel'),
                       onPressed: actions.createNovel,
                     ),
                     _SecondaryButton(
                       icon: Icons.upload_file,
-                      label: '导入小说',
+                      label: context.l10n.text('action.importNovel'),
                       onPressed: actions.importNovel,
                     ),
                   ] else if (recentNovel != null)
                     _PrimaryButton(
                       icon: Icons.edit,
-                      label: '继续写作',
+                      label: context.l10n.text('action.continueWriting'),
                       onPressed: () => actions.openProject(recentNovel),
                     )
                   else
                     _PrimaryButton(
                       icon: Icons.add,
-                      label: '新建小说',
+                      label: context.l10n.text('action.newNovel'),
                       onPressed: actions.createNovel,
                     ),
                 ],
@@ -306,7 +1675,7 @@ class _PrimaryWorkCard extends StatelessWidget {
 
     return _CardShell(
       key: const ValueKey('dashboard-primary-work-card'),
-      minHeight: 290,
+      minHeight: fillAvailableHeight ? 420 : 290,
       child: fillAvailableHeight
           ? content
           : SizedBox(
@@ -330,49 +1699,57 @@ class _PrimaryWorkCard extends StatelessWidget {
     return null;
   }
 
-  String _statusText() {
+  String _statusText(BuildContext context) {
+    final l10n = context.l10n;
     switch (state.mode) {
       case DashboardMode.loading:
-        return '正在加载';
+        return l10n.text('dashboard.loading.label');
       case DashboardMode.firstUse:
-        return '开始创作';
+        return l10n.text('dashboard.firstUse.label');
       case DashboardMode.noRecentWriting:
-        return '选择项目';
+        return l10n.text('dashboard.selectProject.label');
       case DashboardMode.searchEmpty:
       case DashboardMode.populated:
-        return '继续上次';
+        return l10n.text('dashboard.populated.label');
     }
   }
 
-  String _titleText() {
+  String _titleText(BuildContext context) {
+    final l10n = context.l10n;
     switch (state.mode) {
       case DashboardMode.loading:
-        return '正在读取本地创作数据';
+        return l10n.text('dashboard.loading.title');
       case DashboardMode.firstUse:
-        return '还没有小说项目';
+        return l10n.text('dashboard.firstUse.title');
       case DashboardMode.noRecentWriting:
-        return '选择一本小说继续创作';
+        return l10n.text('dashboard.populated.titleFallback');
       case DashboardMode.searchEmpty:
       case DashboardMode.populated:
-        return state.recentWriting?.novelTitle ?? '选择一本小说继续创作';
+        return state.recentWriting?.novelTitle ??
+            l10n.text('dashboard.populated.titleFallback');
     }
   }
 
-  String _metaText() {
+  String _metaText(BuildContext context) {
+    final l10n = context.l10n;
     switch (state.mode) {
       case DashboardMode.loading:
-        return '请稍候';
+        return l10n.text('dashboard.loading.description');
       case DashboardMode.firstUse:
-        return '创建或导入一个小说项目后，可以在这里继续写作。';
+        return l10n.text('dashboard.firstUse.description');
       case DashboardMode.noRecentWriting:
-        return '${state.projectCount} 个项目 · 总字数 ${_formatWords(state.totalWordCount)}';
+        return l10n.projectStats(
+          state.projectCount,
+          _formatWords(context, state.totalWordCount),
+        );
       case DashboardMode.searchEmpty:
       case DashboardMode.populated:
         final chapterTitle = state.recentWriting?.chapterTitle;
-        final suffix = chapterTitle == null || chapterTitle.isEmpty
-            ? ''
-            : ' · $chapterTitle';
-        return '${state.projectCount} 个项目 · 总字数 ${_formatWords(state.totalWordCount)}$suffix';
+        return l10n.projectStats(
+          state.projectCount,
+          _formatWords(context, state.totalWordCount),
+          suffix: chapterTitle,
+        );
     }
   }
 }
@@ -386,19 +1763,20 @@ class _StatsColumn extends StatelessWidget {
   Widget build(BuildContext context) {
     final goal = state.writingGoal;
     final colors = AppPalette.of(context);
+    final l10n = context.l10n;
 
     return Column(
       key: const ValueKey('dashboard-stats-column'),
       children: [
         _StatCard(
-          title: '今日写作目标',
+          title: l10n.text('dashboard.todayGoal'),
           value: goal == null
-              ? '未设置'
-              : '${_formatWords(goal.currentWords)} / ${_formatWords(goal.targetWords)}',
+              ? l10n.text('dashboard.goalUnset')
+              : l10n.goalProgress(goal.currentWords, goal.targetWords),
           icon: Icons.track_changes,
           child: goal == null
               ? Text(
-                  '没有今日目标',
+                  l10n.text('dashboard.goalEmpty'),
                   style: TextStyle(
                     color: colors.muted,
                     fontSize: 12,
@@ -414,17 +1792,17 @@ class _StatsColumn extends StatelessWidget {
                   color: colors.brand,
                 ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         _StatCard(
-          title: '小说项目',
+          title: l10n.text('dashboard.projectCount'),
           value: state.projectCount.toString(),
           icon: Icons.menu_book,
           iconColor: colors.brand,
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         _StatCard(
-          title: '总字数',
-          value: _formatWords(state.totalWordCount),
+          title: l10n.text('dashboard.totalWords'),
+          value: _formatWords(context, state.totalWordCount),
           icon: Icons.trending_up,
           iconColor: colors.success,
         ),
@@ -449,6 +1827,7 @@ class _ProjectsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final l10n = context.l10n;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -457,7 +1836,7 @@ class _ProjectsSection extends StatelessWidget {
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 760;
             final title = Text(
-              '我的小说',
+              l10n.text('dashboard.myNovels'),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     color: colors.text,
                     fontWeight: FontWeight.w700,
@@ -474,11 +1853,11 @@ class _ProjectsSection extends StatelessWidget {
                     child: TextField(
                       controller: searchController,
                       onChanged: onSearchChanged,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         isDense: true,
-                        prefixIcon: Icon(Icons.search, size: 18),
-                        hintText: '搜索小说...',
-                        border: OutlineInputBorder(
+                        prefixIcon: const Icon(Icons.search, size: 18),
+                        hintText: l10n.text('dashboard.searchHint'),
+                        border: const OutlineInputBorder(
                           borderRadius: BorderRadius.all(Radius.circular(10)),
                         ),
                       ),
@@ -486,12 +1865,12 @@ class _ProjectsSection extends StatelessWidget {
                   ),
                 _SecondaryButton(
                   icon: Icons.upload_file,
-                  label: '导入小说',
+                  label: l10n.text('action.importNovel'),
                   onPressed: actions.importNovel,
                 ),
                 _PrimaryButton(
                   icon: Icons.add,
-                  label: '新建小说',
+                  label: l10n.text('action.newNovel'),
                   onPressed: actions.createNovel,
                 ),
               ],
@@ -583,6 +1962,7 @@ class _ProjectCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final l10n = context.l10n;
 
     return Material(
       color: colors.card,
@@ -618,7 +1998,9 @@ class _ProjectCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    novel.summary.isEmpty ? '暂无简介' : novel.summary,
+                    novel.summary.isEmpty
+                        ? l10n.text('dashboard.noSummary')
+                        : novel.summary,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -628,7 +2010,7 @@ class _ProjectCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 14),
                   Text(
-                    "${_formatWords(novel.wordCount)} · ${_novelTags(novel)}",
+                    "${_formatWords(context, novel.wordCount)} · ${_novelTags(context, novel)}",
                     style: TextStyle(
                       color: colors.muted,
                       fontSize: 12,
@@ -652,6 +2034,7 @@ class _EmptyProjects extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final l10n = context.l10n;
 
     return _CardShell(
       minHeight: 190,
@@ -668,7 +2051,7 @@ class _EmptyProjects extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               Text(
-                '暂无小说项目',
+                l10n.text('dashboard.emptyTitle'),
                 style: TextStyle(
                   color: colors.text,
                   fontSize: 17,
@@ -677,7 +2060,7 @@ class _EmptyProjects extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                '创建或导入一个小说项目后，会显示在这里。',
+                l10n.text('dashboard.emptyDescription'),
                 style: TextStyle(color: colors.muted),
               ),
               const SizedBox(height: 18),
@@ -687,12 +2070,12 @@ class _EmptyProjects extends StatelessWidget {
                 children: [
                   _PrimaryButton(
                     icon: Icons.add,
-                    label: '新建小说',
+                    label: l10n.text('action.newNovel'),
                     onPressed: actions.createNovel,
                   ),
                   _SecondaryButton(
                     icon: Icons.upload_file,
-                    label: '导入小说',
+                    label: l10n.text('action.importNovel'),
                     onPressed: actions.importNovel,
                   ),
                 ],
@@ -713,12 +2096,13 @@ class _SearchEmpty extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final l10n = context.l10n;
 
     return _CardShell(
       minHeight: 150,
       child: Center(
         child: Text(
-          '没有匹配“${query.trim()}”的小说项目',
+          l10n.searchEmpty(query.trim()),
           style: TextStyle(color: colors.muted),
         ),
       ),
@@ -952,7 +2336,7 @@ class _SecondaryButton extends StatelessWidget {
   }
 }
 
-String _formatWords(int words) {
+String _formatWords(BuildContext context, int words) {
   if (words < 10000) {
     return words.toString();
   }
@@ -960,10 +2344,27 @@ String _formatWords(int words) {
   final text = value == value.roundToDouble()
       ? value.toStringAsFixed(0)
       : value.toStringAsFixed(1);
-  return '$text万';
+  return context.l10n.tenThousands(text);
 }
 
-String _novelTags(NovelSummary novel) {
+String _relativeTime(DateTime date) {
+  final diff = DateTime.now().difference(date);
+  if (diff.inMinutes < 1) {
+    return '刚刚';
+  }
+  if (diff.inHours < 1) {
+    return '${diff.inMinutes}分钟前';
+  }
+  if (diff.inDays < 1) {
+    return '${diff.inHours}小时前';
+  }
+  if (diff.inDays == 1) {
+    return '昨天';
+  }
+  return '${diff.inDays}天前';
+}
+
+String _novelTags(BuildContext context, NovelSummary novel) {
   final tags = [
     if (novel.category.isNotEmpty) novel.category,
     if (novel.workType.isNotEmpty) novel.workType,
@@ -974,5 +2375,7 @@ String _novelTags(NovelSummary novel) {
         novel.status.isNotEmpty)
       novel.status,
   ];
-  return tags.isEmpty ? '未设置类型' : tags.join(' · ');
+  return tags.isEmpty
+      ? context.l10n.text('dashboard.unsetType')
+      : tags.join(' · ');
 }

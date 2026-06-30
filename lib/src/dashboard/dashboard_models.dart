@@ -1,3 +1,5 @@
+import '../book_lab/book_deconstruction_workflow.dart';
+
 enum DashboardMode {
   loading,
   firstUse,
@@ -122,4 +124,47 @@ class DashboardViewState {
   bool get hasNovels => novels.isNotEmpty;
   bool get showProjectSearch => hasNovels;
   int get projectCount => novels.length;
+}
+
+enum BookDeconstructionProjectStatus {
+  draft,
+  running,
+  paused,
+  completed,
+  failed,
+}
+
+class BookDeconstructionProject {
+  const BookDeconstructionProject({
+    required this.id,
+    required this.title,
+    required this.status,
+    required this.progress,
+    required this.chapterCount,
+    required this.characterCount,
+    required this.foreshadowingCount,
+    required this.styleAssetCount,
+    required this.updatedAt,
+    required this.nodeStatuses,
+    this.novelId,
+    this.novelTitle,
+    this.currentNodeId,
+  });
+
+  final int id;
+  final String title;
+  final int? novelId;
+  final String? novelTitle;
+  final BookDeconstructionProjectStatus status;
+  final String? currentNodeId;
+  final double progress;
+  final int chapterCount;
+  final int characterCount;
+  final int foreshadowingCount;
+  final int styleAssetCount;
+  final DateTime updatedAt;
+  final Map<String, BookDeconstructionNodeStatus> nodeStatuses;
+
+  bool get hasNovel => novelId != null;
+  bool get isRunning => status == BookDeconstructionProjectStatus.running;
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'app_appearance.dart';
+
 @immutable
 class AppPalette extends ThemeExtension<AppPalette> {
   const AppPalette({
@@ -104,9 +106,83 @@ class AppTheme {
 
   static ThemeData get dark => _build(AppPalette.dark, Brightness.dark);
 
+  static ThemeData lightFor(AppVisualTheme visualTheme) {
+    return _build(_paletteFor(visualTheme, Brightness.light), Brightness.light);
+  }
+
+  static ThemeData darkFor(AppVisualTheme visualTheme) {
+    return _build(_paletteFor(visualTheme, Brightness.dark), Brightness.dark);
+  }
+
+  static AppPalette _paletteFor(
+    AppVisualTheme visualTheme,
+    Brightness brightness,
+  ) {
+    final dark = brightness == Brightness.dark;
+    final base = dark ? AppPalette.dark : AppPalette.light;
+
+    switch (visualTheme) {
+      case AppVisualTheme.mirroric:
+        return base.copyWith(
+          brand: dark ? const Color(0xFFE0A36D) : const Color(0xFFC78B5F),
+          success: dark ? const Color(0xFF6EE7B7) : const Color(0xFF16A34A),
+        );
+      case AppVisualTheme.manuscript:
+        return base.copyWith(
+          brand: dark ? const Color(0xFF8FB3E8) : const Color(0xFF183457),
+          background: dark ? const Color(0xFF0F172A) : const Color(0xFFF7F8F3),
+          card: dark ? const Color(0xFF151E2F) : const Color(0xFFFFFFFF),
+        );
+      case AppVisualTheme.ink:
+        return base.copyWith(
+          brand: dark ? const Color(0xFFE57373) : const Color(0xFFB23A3A),
+          background: dark ? const Color(0xFF151313) : const Color(0xFFFBFAF7),
+        );
+      case AppVisualTheme.classic:
+        return base.copyWith(
+          brand: dark ? const Color(0xFFE5E7EB) : const Color(0xFF111111),
+        );
+      case AppVisualTheme.azure:
+        return base.copyWith(
+          brand: dark ? const Color(0xFF7FB4FF) : const Color(0xFF2F64E8),
+          success: dark ? const Color(0xFF67E8F9) : const Color(0xFF0891B2),
+        );
+      case AppVisualTheme.jade:
+        return base.copyWith(
+          brand: dark ? const Color(0xFF74E3A2) : const Color(0xFF4CD779),
+          success: dark ? const Color(0xFFA7F3D0) : const Color(0xFF16A34A),
+        );
+      case AppVisualTheme.violet:
+        return base.copyWith(
+          brand: dark ? const Color(0xFFC084FC) : const Color(0xFF9333EA),
+          background: dark ? const Color(0xFF15111F) : const Color(0xFFFCFAFF),
+        );
+      case AppVisualTheme.ember:
+        return base.copyWith(
+          brand: dark ? const Color(0xFFFBBF24) : const Color(0xFFF59E0B),
+          background: dark ? const Color(0xFF17120A) : const Color(0xFFFFFCF5),
+        );
+      case AppVisualTheme.rose:
+        return base.copyWith(
+          brand: dark ? const Color(0xFFF472B6) : const Color(0xFFB0477C),
+          background: dark ? const Color(0xFF1A1117) : const Color(0xFFFFFAFC),
+        );
+      case AppVisualTheme.ivory:
+        return base.copyWith(
+          brand: dark ? const Color(0xFFD6C7B0) : const Color(0xFF9BA791),
+          background: dark ? const Color(0xFF151610) : const Color(0xFFFBFAF3),
+        );
+      case AppVisualTheme.starCloud:
+        return base.copyWith(
+          brand: dark ? const Color(0xFF22D3EE) : const Color(0xFF078BA3),
+          background: dark ? const Color(0xFF07151C) : const Color(0xFFF6FCFE),
+        );
+    }
+  }
+
   static ThemeData _build(AppPalette palette, Brightness brightness) {
     final colorScheme = ColorScheme.fromSeed(
-      seedColor: AppPalette.light.brand,
+      seedColor: palette.brand,
       brightness: brightness,
     );
 

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../book_lab/book_deconstruction_workflow.dart';
 import '../dashboard/dashboard_models.dart';
 
 class DashboardRepository {
@@ -126,6 +127,187 @@ class DashboardRepository {
     });
   }
 
+  Future<List<BookDeconstructionProject>> loadBookDeconstructionProjects({
+    bool recoverInterrupted = true,
+  }) async {
+    final db = await _open();
+    if (recoverInterrupted) {
+      await _recoverInterruptedBookDeconstructionRuns(db);
+    }
+    return _loadBookDeconstructionProjects(db);
+  }
+
+  Future<BookDeconstructionProject?>
+      loadCurrentBookDeconstructionProject() async {
+    final projects = await loadBookDeconstructionProjects();
+    return projects.isEmpty ? null : projects.first;
+  }
+
+  Future<int> createBookDeconstructionProject({int? novelId}) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    String? novelTitle;
+    if (novelId != null) {
+      novelTitle = await _loadNovelTitle(db, novelId);
+    }
+
+    return db.insert('book_deconstruction_projects', {
+      'title': novelTitle == null ? '未命名拆书项目' : '$novelTitle 拆解',
+      'novel_id': novelId,
+      'status': BookDeconstructionProjectStatus.draft.name,
+      'current_node_id': null,
+      'progress': 0.0,
+      'chapter_count': 0,
+      'character_count': 0,
+      'foreshadowing_count': 0,
+      'style_asset_count': 0,
+      'created_at': timestamp,
+      'updated_at': timestamp,
+    });
+  }
+
+  Future<void> assignNovelToBookDeconstructionProject({
+    required int projectId,
+    required int novelId,
+  }) async {
+    final db = await _open();
+    final novelTitle = await _loadNovelTitle(db, novelId);
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'book_deconstruction_nodes',
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+      );
+      await txn.delete(
+        'book_deconstruction_artifacts',
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+      );
+      await txn.update(
+        'book_deconstruction_projects',
+        {
+          'title': novelTitle == null ? '未命名拆书项目' : '$novelTitle 拆解',
+          'novel_id': novelId,
+          'status': BookDeconstructionProjectStatus.draft.name,
+          'current_node_id': null,
+          'progress': 0.0,
+          'chapter_count': 0,
+          'character_count': 0,
+          'foreshadowing_count': 0,
+          'style_asset_count': 0,
+          'updated_at': timestamp,
+        },
+        where: 'id = ?',
+        whereArgs: [projectId],
+      );
+    });
+  }
+
+  Future<void> deleteBookDeconstructionProject(int projectId) async {
+    final db = await _open();
+    await db.transaction((txn) async {
+      await txn.delete(
+        'book_deconstruction_nodes',
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+      );
+      await txn.delete(
+        'book_deconstruction_artifacts',
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+      );
+      await txn.delete(
+        'book_deconstruction_projects',
+        where: 'id = ?',
+        whereArgs: [projectId],
+      );
+    });
+  }
+
+  Future<void> setBookDeconstructionProjectStatus({
+    required int projectId,
+    required BookDeconstructionProjectStatus status,
+    String? currentNodeId,
+  }) async {
+    final db = await _open();
+    await db.update(
+      'book_deconstruction_projects',
+      {
+        'status': status.name,
+        'current_node_id': currentNodeId,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [projectId],
+    );
+  }
+
+  Future<void> updateBookDeconstructionNodeStatus({
+    required int projectId,
+    required String nodeId,
+    required BookDeconstructionNodeStatus status,
+    String message = '',
+  }) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.insert(
+      'book_deconstruction_nodes',
+      {
+        'project_id': projectId,
+        'node_id': nodeId,
+        'status': status.name,
+        'message': message,
+        'updated_at': timestamp,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await db.update(
+      'book_deconstruction_projects',
+      {
+        'current_node_id': nodeId,
+        'updated_at': timestamp,
+      },
+      where: 'id = ?',
+      whereArgs: [projectId],
+    );
+    await _refreshBookDeconstructionStats(db, projectId);
+  }
+
+  Future<void> recordBookDeconstructionNodeOutput({
+    required int projectId,
+    required BookDeconstructionNode node,
+    required String content,
+  }) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final path = _artifactPathForNode(projectId, node);
+    await db.insert(
+      'book_deconstruction_artifacts',
+      {
+        'project_id': projectId,
+        'node_id': node.id,
+        'artifact_path': path,
+        'artifact_kind': _artifactKindForNode(node),
+        'content': content,
+        'updated_at': timestamp,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<bool> bookDeconstructionProjectHasNovel(int projectId) async {
+    final db = await _open();
+    final rows = await db.query(
+      'book_deconstruction_projects',
+      columns: ['novel_id'],
+      where: 'id = ? AND novel_id IS NOT NULL',
+      whereArgs: [projectId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<void> close() async {
     final database = _database;
     if (database == null) {
@@ -133,6 +315,41 @@ class DashboardRepository {
     }
     _database = null;
     await database.close();
+  }
+
+  Future<String> backupToDirectory(String directoryPath,
+      {DateTime? now}) async {
+    final directory = Directory(directoryPath.trim());
+    if (!await directory.exists()) {
+      throw ArgumentError.value(
+        directoryPath,
+        'directoryPath',
+        'Backup directory does not exist.',
+      );
+    }
+
+    await _ensureDatabaseFile();
+    await close();
+
+    final timestamp = _backupTimestamp(now ?? DateTime.now());
+    final targetPath =
+        '${directory.path}${Platform.pathSeparator}ai_novel_factory_$timestamp.sqlite';
+    return File(_databasePath).copy(targetPath).then((file) => file.path);
+  }
+
+  Future<void> restoreFromBackup(String backupPath) async {
+    final backupFile = File(backupPath.trim());
+    if (!await backupFile.exists()) {
+      throw ArgumentError.value(
+        backupPath,
+        'backupPath',
+        'Backup file does not exist.',
+      );
+    }
+
+    await close();
+    await File(_databasePath).parent.create(recursive: true);
+    await backupFile.copy(_databasePath);
   }
 
   Future<Database> _open() async {
@@ -144,7 +361,7 @@ class DashboardRepository {
     final database = await _databaseFactory.openDatabase(
       _databasePath,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onCreate: (db, version) async {
           await db.execute('''
 CREATE TABLE novels (
@@ -200,6 +417,7 @@ CREATE TABLE novel_tags (
   FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
 )
 ''');
+          await _createBookDeconstructionTables(db);
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
@@ -221,12 +439,232 @@ CREATE TABLE novel_tags (
 )
 ''');
           }
+          if (oldVersion < 4) {
+            await _createBookDeconstructionTables(db);
+          }
         },
       ),
     );
 
     _database = database;
     return database;
+  }
+
+  static Future<void> _createBookDeconstructionTables(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute('''
+CREATE TABLE book_deconstruction_projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  novel_id INTEGER,
+  status TEXT NOT NULL,
+  current_node_id TEXT,
+  progress REAL NOT NULL DEFAULT 0,
+  chapter_count INTEGER NOT NULL DEFAULT 0,
+  character_count INTEGER NOT NULL DEFAULT 0,
+  foreshadowing_count INTEGER NOT NULL DEFAULT 0,
+  style_asset_count INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE SET NULL
+)
+''');
+    await db.execute('''
+CREATE TABLE book_deconstruction_nodes (
+  project_id INTEGER NOT NULL,
+  node_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, node_id),
+  FOREIGN KEY (project_id) REFERENCES book_deconstruction_projects(id)
+    ON DELETE CASCADE
+)
+''');
+    await db.execute('''
+CREATE TABLE book_deconstruction_artifacts (
+  project_id INTEGER NOT NULL,
+  node_id TEXT NOT NULL,
+  artifact_path TEXT NOT NULL,
+  artifact_kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, artifact_path),
+  FOREIGN KEY (project_id) REFERENCES book_deconstruction_projects(id)
+    ON DELETE CASCADE
+)
+''');
+  }
+
+  Future<void> _recoverInterruptedBookDeconstructionRuns(Database db) async {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.update(
+      'book_deconstruction_projects',
+      {
+        'status': BookDeconstructionProjectStatus.paused.name,
+        'updated_at': timestamp,
+      },
+      where: 'status = ?',
+      whereArgs: [BookDeconstructionProjectStatus.running.name],
+    );
+    await db.update(
+      'book_deconstruction_nodes',
+      {
+        'status': BookDeconstructionNodeStatus.pending.name,
+        'message': 'Recovered after interruption.',
+        'updated_at': timestamp,
+      },
+      where: 'status = ?',
+      whereArgs: [BookDeconstructionNodeStatus.running.name],
+    );
+  }
+
+  Future<List<BookDeconstructionProject>> _loadBookDeconstructionProjects(
+    Database db,
+  ) async {
+    final projectRows = await db.rawQuery('''
+SELECT
+  p.id,
+  p.title,
+  p.novel_id,
+  n.title AS novel_title,
+  p.status,
+  p.current_node_id,
+  p.progress,
+  p.chapter_count,
+  p.character_count,
+  p.foreshadowing_count,
+  p.style_asset_count,
+  p.updated_at
+FROM book_deconstruction_projects p
+LEFT JOIN novels n ON n.id = p.novel_id
+ORDER BY p.updated_at DESC, p.id DESC
+''');
+    final nodeStatuses = await _loadBookDeconstructionNodeStatuses(db);
+
+    return [
+      for (final row in projectRows)
+        BookDeconstructionProject(
+          id: row['id'] as int,
+          title: row['title'] as String,
+          novelId: row['novel_id'] as int?,
+          novelTitle: row['novel_title'] as String?,
+          status: _parseBookProjectStatus(row['status'] as String),
+          currentNodeId: row['current_node_id'] as String?,
+          progress: (row['progress'] as num).toDouble(),
+          chapterCount: row['chapter_count'] as int,
+          characterCount: row['character_count'] as int,
+          foreshadowingCount: row['foreshadowing_count'] as int,
+          styleAssetCount: row['style_asset_count'] as int,
+          updatedAt: _fromTimestamp(row['updated_at'] as int),
+          nodeStatuses: nodeStatuses[row['id'] as int] ?? const {},
+        ),
+    ];
+  }
+
+  Future<Map<int, Map<String, BookDeconstructionNodeStatus>>>
+      _loadBookDeconstructionNodeStatuses(Database db) async {
+    final rows = await db.query(
+      'book_deconstruction_nodes',
+      columns: ['project_id', 'node_id', 'status'],
+    );
+    final statuses = <int, Map<String, BookDeconstructionNodeStatus>>{};
+    for (final row in rows) {
+      final projectId = row['project_id'] as int;
+      (statuses[projectId] ??= <String, BookDeconstructionNodeStatus>{})[
+              row['node_id'] as String] =
+          _parseBookNodeStatus(row['status'] as String);
+    }
+    return statuses;
+  }
+
+  Future<String?> _loadNovelTitle(Database db, int novelId) async {
+    final rows = await db.query(
+      'novels',
+      columns: ['title'],
+      where: 'id = ?',
+      whereArgs: [novelId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.single['title'] as String;
+  }
+
+  Future<void> _refreshBookDeconstructionStats(
+    Database db,
+    int projectId,
+  ) async {
+    final nodeRows = await db.query(
+      'book_deconstruction_nodes',
+      columns: ['node_id', 'status'],
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+    );
+    final passedNodeIds = {
+      for (final row in nodeRows)
+        if (row['status'] == BookDeconstructionNodeStatus.passed.name)
+          row['node_id'] as String,
+    };
+    final projectRows = await db.query(
+      'book_deconstruction_projects',
+      columns: ['novel_id'],
+      where: 'id = ?',
+      whereArgs: [projectId],
+      limit: 1,
+    );
+    final novelId = projectRows.isEmpty ? null : projectRows.single['novel_id'];
+    final chapterCount =
+        novelId == null ? 0 : await _countChapters(db, novelId as int);
+    final progress =
+        passedNodeIds.length / bookDeconstructionWorkflowNodes.length;
+
+    await db.update(
+      'book_deconstruction_projects',
+      {
+        'progress': progress.clamp(0.0, 1.0),
+        'chapter_count':
+            passedNodeIds.contains('gate_1_text_cleaned') ? chapterCount : 0,
+        'character_count': await _countArtifacts(db, projectId, 'characters'),
+        'foreshadowing_count':
+            await _countArtifacts(db, projectId, 'foreshadowing'),
+        'style_asset_count': await _countArtifacts(db, projectId, 'style'),
+      },
+      where: 'id = ?',
+      whereArgs: [projectId],
+    );
+  }
+
+  Future<int> _countChapters(Database db, int novelId) async {
+    final rows = await db.rawQuery(
+      'SELECT COUNT(*) AS total FROM chapters WHERE novel_id = ?',
+      [novelId],
+    );
+    return rows.single['total'] as int;
+  }
+
+  Future<int> _countArtifacts(
+    Database db,
+    int projectId,
+    String kind,
+  ) async {
+    final rows = await db.rawQuery(
+      '''
+SELECT COUNT(*) AS total
+FROM book_deconstruction_artifacts
+WHERE project_id = ? AND artifact_kind = ?
+''',
+      [projectId, kind],
+    );
+    return rows.single['total'] as int;
+  }
+
+  Future<void> _ensureDatabaseFile() async {
+    if (await File(_databasePath).exists()) {
+      return;
+    }
+    final database = await _open();
+    await database.close();
+    _database = null;
   }
 
   Future<List<NovelSummary>> _loadNovels(Database db) async {
@@ -455,6 +893,16 @@ String _defaultDatabasePath() {
   return '${Directory.current.path}${Platform.pathSeparator}ai_novel_factory.sqlite';
 }
 
+String _backupTimestamp(DateTime date) {
+  final local = date.toLocal();
+  return '${local.year}'
+      '${local.month.toString().padLeft(2, '0')}'
+      '${local.day.toString().padLeft(2, '0')}_'
+      '${local.hour.toString().padLeft(2, '0')}'
+      '${local.minute.toString().padLeft(2, '0')}'
+      '${local.second.toString().padLeft(2, '0')}';
+}
+
 String _dayKey(DateTime date) {
   final month = date.month.toString().padLeft(2, '0');
   final day = date.day.toString().padLeft(2, '0');
@@ -474,10 +922,49 @@ DateTime _fromTimestamp(int timestamp) {
   return DateTime.fromMillisecondsSinceEpoch(timestamp);
 }
 
+BookDeconstructionProjectStatus _parseBookProjectStatus(String value) {
+  for (final status in BookDeconstructionProjectStatus.values) {
+    if (status.name == value) {
+      return status;
+    }
+  }
+  return BookDeconstructionProjectStatus.draft;
+}
+
+BookDeconstructionNodeStatus _parseBookNodeStatus(String value) {
+  for (final status in BookDeconstructionNodeStatus.values) {
+    if (status.name == value) {
+      return status;
+    }
+  }
+  return BookDeconstructionNodeStatus.pending;
+}
+
+String _artifactKindForNode(BookDeconstructionNode node) {
+  if (node.id.contains('chapter')) {
+    return 'chapters';
+  }
+  if (node.id.contains('relationship') || node.id.contains('character')) {
+    return 'characters';
+  }
+  if (node.id.contains('foreshadowing')) {
+    return 'foreshadowing';
+  }
+  if (node.id.contains('style')) {
+    return 'style';
+  }
+  if (node.id.contains('skill')) {
+    return 'skill';
+  }
+  return 'workflow';
+}
+
+String _artifactPathForNode(int projectId, BookDeconstructionNode node) {
+  return 'book_$projectId/${_artifactKindForNode(node)}/${node.id}.json';
+}
+
 String _titleFromFile(File file) {
-  final name = file.uri.pathSegments.isEmpty
-      ? file.path
-      : Uri.decodeComponent(file.uri.pathSegments.last);
+  final name = file.path.split(RegExp(r'[\\/]')).last;
   final dot = name.lastIndexOf('.');
   final title = dot <= 0 ? name : name.substring(0, dot);
   final trimmed = title.trim();
