@@ -6,6 +6,7 @@ import 'package:ai_novel_factory/src/app/app_dream_settings.dart';
 import 'package:ai_novel_factory/src/app/app_editor_settings.dart';
 import 'package:ai_novel_factory/src/app/app_theme.dart';
 import 'package:ai_novel_factory/src/app/app_storage_settings.dart';
+import 'package:ai_novel_factory/src/data/dashboard_repository.dart';
 import 'package:ai_novel_factory/src/settings/settings_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -178,6 +179,7 @@ void main() {
     expect(find.text('00 拆书总控 Agent'), findsOneWidget);
     expect(find.text('01 文本清洗 Agent'), findsOneWidget);
     expect(find.text('11 拆书质检 Agent'), findsOneWidget);
+    expect(find.text('实验性写作 Agent'), findsOneWidget);
     expect(find.text('继承拆书 Agent'), findsWidgets);
 
     await tester.tap(find.byKey(const ValueKey('select-field-01 文本清洗 Agent')));
@@ -241,7 +243,7 @@ void main() {
     );
     expect(enabledSwitch.value, isTrue);
   });
-  testWidgets('usage page can filter by fetched provider and model',
+  testWidgets('usage page displays recorded provider and model usage',
       (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1200, 900);
@@ -249,7 +251,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
 
     await tester.pumpWidget(
-      const _SettingsHarness(
+      _SettingsHarness(
         initialAiSettings: AppAiSettings(
           providers: [
             AppAiProviderSettings(
@@ -263,6 +265,19 @@ void main() {
             ),
           ],
         ),
+        initialUsageRecords: [
+          AiUsageRecord(
+            providerId: 'test-provider',
+            providerName: 'api.example.com',
+            model: 'usage-model',
+            inputTokens: 120,
+            outputTokens: 45,
+            cacheReadTokens: 8,
+            cacheWriteTokens: 3,
+            totalTokens: 168,
+            createdAt: DateTime.now(),
+          ),
+        ],
       ),
     );
     await tester.pumpAndSettle();
@@ -274,18 +289,11 @@ void main() {
     await tester.tap(find.text('Usage').first);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('select-field-Provider')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('api.example.com').last);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const ValueKey('select-field-Usage Model')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('usage-model').last);
-    await tester.pumpAndSettle();
-
-    expect(find.text('api.example.com'), findsOneWidget);
-    expect(find.text('usage-model'), findsOneWidget);
+    expect(find.text('api.example.com'), findsWidgets);
+    expect(find.text('usage-model'), findsWidgets);
+    expect(find.text('168'), findsWidgets);
+    expect(find.text('120'), findsWidgets);
+    expect(find.text('45'), findsWidgets);
   });
 
   testWidgets('ai provider edits provider blocks and can add a provider',
@@ -408,9 +416,11 @@ void main() {
 class _SettingsHarness extends StatefulWidget {
   const _SettingsHarness({
     this.initialAiSettings = const AppAiSettings(),
+    this.initialUsageRecords = const [],
   });
 
   final AppAiSettings initialAiSettings;
+  final List<AiUsageRecord> initialUsageRecords;
 
   @override
   State<_SettingsHarness> createState() => _SettingsHarnessState();
@@ -476,6 +486,7 @@ class _SettingsHarnessState extends State<_SettingsHarness> {
                   },
                   onBackupNow: (directory) async => '$directory/test.sqlite',
                   onRestoreBackup: (_) async {},
+                  loadUsageRecords: () async => widget.initialUsageRecords,
                 ),
                 child: const Text('打开设置'),
               ),

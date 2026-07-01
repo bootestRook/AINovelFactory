@@ -12,10 +12,12 @@ import '../app/app_editor_settings.dart';
 import '../app/app_localizations.dart';
 import '../app/app_storage_settings.dart';
 import '../app/app_theme.dart';
+import '../data/dashboard_repository.dart';
 import '../widgets/app_select_field.dart';
 
 typedef StorageBackupCallback = Future<String> Function(String directoryPath);
 typedef StorageRestoreCallback = Future<void> Function(String backupPath);
+typedef UsageRecordsLoader = Future<List<AiUsageRecord>> Function();
 
 Future<void> showSettingsDialog(
   BuildContext context, {
@@ -35,6 +37,7 @@ Future<void> showSettingsDialog(
   required ValueChanged<AppStorageSettings> onStorageSettingsChanged,
   required StorageBackupCallback onBackupNow,
   required StorageRestoreCallback onRestoreBackup,
+  required UsageRecordsLoader loadUsageRecords,
   bool showAgents = false,
 }) {
   return showDialog<void>(
@@ -56,6 +59,7 @@ Future<void> showSettingsDialog(
       onStorageSettingsChanged: onStorageSettingsChanged,
       onBackupNow: onBackupNow,
       onRestoreBackup: onRestoreBackup,
+      loadUsageRecords: loadUsageRecords,
       showAgents: showAgents,
     ),
   );
@@ -157,6 +161,7 @@ class _SettingsDialog extends StatefulWidget {
     required this.onStorageSettingsChanged,
     required this.onBackupNow,
     required this.onRestoreBackup,
+    required this.loadUsageRecords,
     required this.showAgents,
   });
 
@@ -176,6 +181,7 @@ class _SettingsDialog extends StatefulWidget {
   final ValueChanged<AppStorageSettings> onStorageSettingsChanged;
   final StorageBackupCallback onBackupNow;
   final StorageRestoreCallback onRestoreBackup;
+  final UsageRecordsLoader loadUsageRecords;
   final bool showAgents;
 
   @override
@@ -282,6 +288,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                         },
                         onBackupNow: widget.onBackupNow,
                         onRestoreBackup: widget.onRestoreBackup,
+                        loadUsageRecords: widget.loadUsageRecords,
                       ),
                     ),
                   ],
@@ -425,6 +432,7 @@ class _SettingsContent extends StatelessWidget {
     required this.onStorageSettingsChanged,
     required this.onBackupNow,
     required this.onRestoreBackup,
+    required this.loadUsageRecords,
   });
 
   final _SettingsSection section;
@@ -445,6 +453,7 @@ class _SettingsContent extends StatelessWidget {
   final ValueChanged<AppStorageSettings> onStorageSettingsChanged;
   final StorageBackupCallback onBackupNow;
   final StorageRestoreCallback onRestoreBackup;
+  final UsageRecordsLoader loadUsageRecords;
 
   @override
   Widget build(BuildContext context) {
@@ -493,7 +502,10 @@ class _SettingsContent extends StatelessWidget {
     }
 
     if (section == _SettingsSection.usage) {
-      return _UsageSettingsPage(aiSettings: aiSettings);
+      return _UsageSettingsPage(
+        aiSettings: aiSettings,
+        loadUsageRecords: loadUsageRecords,
+      );
     }
 
     if (section == _SettingsSection.storage) {
@@ -910,9 +922,13 @@ class _AgentModelRow extends StatelessWidget {
 }
 
 class _UsageSettingsPage extends StatefulWidget {
-  const _UsageSettingsPage({required this.aiSettings});
+  const _UsageSettingsPage({
+    required this.aiSettings,
+    required this.loadUsageRecords,
+  });
 
   final AppAiSettings aiSettings;
+  final UsageRecordsLoader loadUsageRecords;
 
   @override
   State<_UsageSettingsPage> createState() => _UsageSettingsPageState();
@@ -924,158 +940,159 @@ class _UsageSettingsPageState extends State<_UsageSettingsPage> {
 
   String _provider = _allProviders;
   String _model = _allModels;
+  late Future<List<AiUsageRecord>> _usageRecords;
+
+  @override
+  void initState() {
+    super.initState();
+    _usageRecords = widget.loadUsageRecords();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final providerOptions = _providerOptions(context);
+    return FutureBuilder<List<AiUsageRecord>>(
+      future: _usageRecords,
+      builder: (context, snapshot) {
+        final records = snapshot.data ?? const <AiUsageRecord>[];
+        final providerOptions = _providerOptions(context, records);
+        final modelOptions = _modelOptions(context, records);
+        final stats = _UsageStats.fromRecords(
+          records,
+          providerId: _provider,
+          model: _model,
+          now: DateTime.now(),
+        );
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _SectionTitle(
+                title: _editorText(context, '词元消耗', 'Token Usage'),
+                description: _editorText(
+                  context,
+                  '按提供商和模型查看真实调用消耗。当前没有用量记录时显示 0，不生成模拟数据。',
+                  'Review real usage by provider and model. Empty usage records stay at zero.',
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: _FilterSelect(
+                      title: _editorText(context, '提供商', 'Provider'),
+                      child: AppSelectField<String>(
+                        label: _editorText(context, '提供商', 'Provider'),
+                        value: _provider,
+                        hint: _editorText(context, '全部提供商', 'All Providers'),
+                        options: providerOptions,
+                        onChanged: (value) {
+                          if (value == null) {
+                            return;
+                          }
+                          setState(() => _provider = value);
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _FilterSelect(
+                      title: _editorText(context, '模型', 'Model'),
+                      child: AppSelectField<String>(
+                        label: _editorText(context, '用量模型', 'Usage Model'),
+                        value: _model,
+                        hint: _editorText(context, '全部模型', 'All Models'),
+                        options: modelOptions,
+                        onChanged: (value) {
+                          if (value == null) {
+                            return;
+                          }
+                          setState(() => _model = value);
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              GridView.count(
+                crossAxisCount: 2,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                childAspectRatio: 1.2,
+                children: [
+                  _UsageSummaryCard(
+                    title: _editorText(context, '本日', 'Today'),
+                    value: _formatUsageNumber(stats.today.totalTokens),
+                    unit: _editorText(context, '词元', 'tokens'),
+                    rows: _usageMetricRows(context, stats.today),
+                  ),
+                  _UsageSummaryCard(
+                    title: _editorText(context, '本月', 'This Month'),
+                    value: _formatUsageNumber(stats.month.totalTokens),
+                    unit: _editorText(context, '词元', 'tokens'),
+                    subtitle: stats.previousMonth.totalTokens == 0
+                        ? _editorText(context, '上月无数据', 'No data last month')
+                        : _editorText(
+                            context,
+                            '上月 ${_formatUsageNumber(stats.previousMonth.totalTokens)}',
+                            'Last month ${_formatUsageNumber(stats.previousMonth.totalTokens)}',
+                          ),
+                    rows: _usageMetricRows(context, stats.month),
+                  ),
+                  _UsageMiniCard(
+                    title: _editorText(context, '今日请求', 'Requests Today'),
+                    value: _formatUsageNumber(stats.today.records.length),
+                    unit: _editorText(context, 'API 调用', 'API calls'),
+                  ),
+                  _UsageMiniCard(
+                    title: _editorText(context, '日平均值', 'Daily Average'),
+                    value: _formatUsageNumber(stats.dailyAverageTokens),
+                    unit: _editorText(context, '词元', 'tokens'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              _UsageChartCard(stats: stats),
+              const SizedBox(height: 24),
+              _UsageDetailTable(records: stats.filteredRecords),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  List<AppSelectOption<String>> _modelOptions(
+    BuildContext context,
+    List<AiUsageRecord> records,
+  ) {
+    final models = {
+      for (final model in widget.aiSettings.activeModels) model,
+      for (final record in records) record.model,
+    }.where((model) => model.trim().isNotEmpty).toList()
+      ..sort();
     final modelOptions = [
       AppSelectOption(
         value: _allModels,
         label: _editorText(context, '全部模型', 'All Models'),
       ),
-      for (final model in widget.aiSettings.activeModels)
-        AppSelectOption(value: model, label: model),
+      for (final model in models) AppSelectOption(value: model, label: model),
     ];
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _SectionTitle(
-            title: _editorText(context, '词元消耗', 'Token Usage'),
-            description: _editorText(
-              context,
-              '按提供商和模型查看真实调用消耗。当前没有用量记录时显示 0，不生成模拟数据。',
-              'Review real usage by provider and model. Empty usage records stay at zero.',
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: _FilterSelect(
-                  title: _editorText(context, '提供商', 'Provider'),
-                  child: AppSelectField<String>(
-                    label: _editorText(context, '提供商', 'Provider'),
-                    value: _provider,
-                    hint: _editorText(context, '全部提供商', 'All Providers'),
-                    options: providerOptions,
-                    onChanged: (value) {
-                      if (value == null) {
-                        return;
-                      }
-                      setState(() => _provider = value);
-                    },
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _FilterSelect(
-                  title: _editorText(context, '模型', 'Model'),
-                  child: AppSelectField<String>(
-                    label: _editorText(context, '用量模型', 'Usage Model'),
-                    value: _model,
-                    hint: _editorText(context, '全部模型', 'All Models'),
-                    options: modelOptions,
-                    onChanged: (value) {
-                      if (value == null) {
-                        return;
-                      }
-                      setState(() => _model = value);
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          GridView.count(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: 1.2,
-            children: [
-              _UsageSummaryCard(
-                title: _editorText(context, '本日', 'Today'),
-                value: '0',
-                unit: _editorText(context, '词元', 'tokens'),
-                rows: [
-                  _UsageMetric(
-                    label: _editorText(context, '输入', 'Input'),
-                    color: Colors.black,
-                    value: '0',
-                  ),
-                  _UsageMetric(
-                    label: _editorText(context, '缓存读取', 'Cache Read'),
-                    color: const Color(0xFF00A878),
-                    value: '0',
-                  ),
-                  _UsageMetric(
-                    label: _editorText(context, '缓存写入', 'Cache Write'),
-                    color: const Color(0xFF333333),
-                    value: '0',
-                  ),
-                  _UsageMetric(
-                    label: _editorText(context, '输出', 'Output'),
-                    color: const Color(0xFF777777),
-                    value: '0',
-                  ),
-                ],
-              ),
-              _UsageSummaryCard(
-                title: _editorText(context, '本月', 'This Month'),
-                value: '0',
-                unit: _editorText(context, '词元', 'tokens'),
-                subtitle: _editorText(context, '上月无数据', 'No data last month'),
-                rows: [
-                  _UsageMetric(
-                    label: _editorText(context, '输入', 'Input'),
-                    color: Colors.black,
-                    value: '0',
-                  ),
-                  _UsageMetric(
-                    label: _editorText(context, '缓存读取', 'Cache Read'),
-                    color: const Color(0xFF00A878),
-                    value: '0',
-                  ),
-                  _UsageMetric(
-                    label: _editorText(context, '缓存写入', 'Cache Write'),
-                    color: const Color(0xFF333333),
-                    value: '0',
-                  ),
-                  _UsageMetric(
-                    label: _editorText(context, '输出', 'Output'),
-                    color: const Color(0xFF777777),
-                    value: '0',
-                  ),
-                ],
-              ),
-              _UsageMiniCard(
-                title: _editorText(context, '今日请求', 'Requests Today'),
-                value: '0',
-                unit: _editorText(context, 'API 调用', 'API calls'),
-              ),
-              _UsageMiniCard(
-                title: _editorText(context, '日平均值', 'Daily Average'),
-                value: '0',
-                unit: _editorText(context, '词元', 'tokens'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          _UsageChartCard(),
-          const SizedBox(height: 24),
-          _UsageDetailTable(),
-        ],
-      ),
-    );
+    return modelOptions;
   }
 
-  List<AppSelectOption<String>> _providerOptions(BuildContext context) {
+  List<AppSelectOption<String>> _providerOptions(
+    BuildContext context,
+    List<AiUsageRecord> records,
+  ) {
+    final recordProviders = {
+      for (final record in records) record.providerId: record.providerName,
+    };
     return [
       AppSelectOption(
         value: _allProviders,
@@ -1086,6 +1103,13 @@ class _UsageSettingsPageState extends State<_UsageSettingsPage> {
           AppSelectOption(
             value: provider.id,
             label: _providerLabel(provider),
+          ),
+      for (final entry in recordProviders.entries)
+        if (!widget.aiSettings.providers
+            .any((provider) => provider.id == entry.key && provider.enabled))
+          AppSelectOption(
+            value: entry.key,
+            label: entry.value.isEmpty ? entry.key : entry.value,
           ),
     ];
   }
@@ -1127,6 +1151,155 @@ class _FilterSelect extends StatelessWidget {
         const SizedBox(height: 6),
         child,
       ],
+    );
+  }
+}
+
+List<_UsageMetric> _usageMetricRows(BuildContext context, _UsageTotals totals) {
+  return [
+    _UsageMetric(
+      label: _editorText(context, '输入', 'Input'),
+      color: Colors.black,
+      value: _formatUsageNumber(totals.inputTokens),
+    ),
+    _UsageMetric(
+      label: _editorText(context, '缓存读取', 'Cache Read'),
+      color: const Color(0xFF00A878),
+      value: _formatUsageNumber(totals.cacheReadTokens),
+    ),
+    _UsageMetric(
+      label: _editorText(context, '缓存写入', 'Cache Write'),
+      color: const Color(0xFF333333),
+      value: _formatUsageNumber(totals.cacheWriteTokens),
+    ),
+    _UsageMetric(
+      label: _editorText(context, '输出', 'Output'),
+      color: const Color(0xFF777777),
+      value: _formatUsageNumber(totals.outputTokens),
+    ),
+  ];
+}
+
+String _formatUsageNumber(int value) {
+  final text = value.toString();
+  final buffer = StringBuffer();
+  for (var i = 0; i < text.length; i++) {
+    if (i > 0 && (text.length - i) % 3 == 0) {
+      buffer.write(',');
+    }
+    buffer.write(text[i]);
+  }
+  return buffer.toString();
+}
+
+class _UsageStats {
+  const _UsageStats({
+    required this.filteredRecords,
+    required this.today,
+    required this.month,
+    required this.previousMonth,
+    required this.dailyAverageTokens,
+  });
+
+  final List<AiUsageRecord> filteredRecords;
+  final _UsageTotals today;
+  final _UsageTotals month;
+  final _UsageTotals previousMonth;
+  final int dailyAverageTokens;
+
+  static _UsageStats fromRecords(
+    List<AiUsageRecord> records, {
+    required String providerId,
+    required String model,
+    required DateTime now,
+  }) {
+    final filtered = records.where((record) {
+      if (providerId != _UsageSettingsPageState._allProviders &&
+          record.providerId != providerId) {
+        return false;
+      }
+      if (model != _UsageSettingsPageState._allModels &&
+          record.model != model) {
+        return false;
+      }
+      return true;
+    }).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final monthStart = DateTime(now.year, now.month);
+    final nextMonthStart = now.month == 12
+        ? DateTime(now.year + 1)
+        : DateTime(now.year, now.month + 1);
+    final previousMonthStart = now.month == 1
+        ? DateTime(now.year - 1, 12)
+        : DateTime(now.year, now.month - 1);
+    final todayRecords = filtered
+        .where((record) => !record.createdAt.isBefore(todayStart))
+        .toList();
+    final monthRecords = filtered
+        .where((record) =>
+            !record.createdAt.isBefore(monthStart) &&
+            record.createdAt.isBefore(nextMonthStart))
+        .toList();
+    final previousMonthRecords = filtered
+        .where((record) =>
+            !record.createdAt.isBefore(previousMonthStart) &&
+            record.createdAt.isBefore(monthStart))
+        .toList();
+    final days = {
+      for (final record in monthRecords)
+        DateTime(record.createdAt.year, record.createdAt.month,
+            record.createdAt.day),
+    }.length;
+    final monthTotals = _UsageTotals.fromRecords(monthRecords);
+    return _UsageStats(
+      filteredRecords: filtered,
+      today: _UsageTotals.fromRecords(todayRecords),
+      month: monthTotals,
+      previousMonth: _UsageTotals.fromRecords(previousMonthRecords),
+      dailyAverageTokens:
+          days == 0 ? 0 : (monthTotals.totalTokens / days).round(),
+    );
+  }
+}
+
+class _UsageTotals {
+  const _UsageTotals({
+    required this.records,
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.cacheReadTokens,
+    required this.cacheWriteTokens,
+    required this.totalTokens,
+  });
+
+  final List<AiUsageRecord> records;
+  final int inputTokens;
+  final int outputTokens;
+  final int cacheReadTokens;
+  final int cacheWriteTokens;
+  final int totalTokens;
+
+  static _UsageTotals fromRecords(List<AiUsageRecord> records) {
+    var inputTokens = 0;
+    var outputTokens = 0;
+    var cacheReadTokens = 0;
+    var cacheWriteTokens = 0;
+    var totalTokens = 0;
+    for (final record in records) {
+      inputTokens += record.inputTokens;
+      outputTokens += record.outputTokens;
+      cacheReadTokens += record.cacheReadTokens;
+      cacheWriteTokens += record.cacheWriteTokens;
+      totalTokens += record.totalTokens;
+    }
+    return _UsageTotals(
+      records: records,
+      inputTokens: inputTokens,
+      outputTokens: outputTokens,
+      cacheReadTokens: cacheReadTokens,
+      cacheWriteTokens: cacheWriteTokens,
+      totalTokens: totalTokens,
     );
   }
 }
@@ -1279,9 +1452,21 @@ class _UsageMetricRow extends StatelessWidget {
 }
 
 class _UsageChartCard extends StatelessWidget {
+  const _UsageChartCard({required this.stats});
+
+  final _UsageStats stats;
+
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day)
+        .subtract(const Duration(days: 29));
+    final last30Days = _UsageTotals.fromRecords(
+      stats.filteredRecords
+          .where((record) => !record.createdAt.isBefore(start))
+          .toList(),
+    );
 
     return _UsageCard(
       child: SizedBox(
@@ -1328,8 +1513,22 @@ class _UsageChartCard extends StatelessWidget {
             Expanded(
               child: Center(
                 child: Text(
-                  _editorText(context, '暂无数据', 'No data'),
-                  style: TextStyle(color: colors.muted, fontSize: 13),
+                  last30Days.totalTokens == 0
+                      ? _editorText(context, '暂无数据', 'No data')
+                      : _editorText(
+                          context,
+                          '过去 30 天共 ${_formatUsageNumber(last30Days.totalTokens)} 词元',
+                          '${_formatUsageNumber(last30Days.totalTokens)} tokens in the last 30 days',
+                        ),
+                  style: TextStyle(
+                    color: last30Days.totalTokens == 0
+                        ? colors.muted
+                        : colors.text,
+                    fontSize: 13,
+                    fontWeight: last30Days.totalTokens == 0
+                        ? FontWeight.w400
+                        : FontWeight.w700,
+                  ),
                 ),
               ),
             ),
@@ -1372,9 +1571,14 @@ class _UsageLegendItem extends StatelessWidget {
 }
 
 class _UsageDetailTable extends StatelessWidget {
+  const _UsageDetailTable({required this.records});
+
+  final List<AiUsageRecord> records;
+
   @override
   Widget build(BuildContext context) {
     final colors = AppPalette.of(context);
+    final visibleRecords = records.take(30).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1415,25 +1619,101 @@ class _UsageDetailTable extends StatelessWidget {
                     _UsageHeaderCell(
                         label: _editorText(context, '输出', 'Output'), flex: 1),
                     _UsageHeaderCell(
-                        label: _editorText(context, '积分', 'Credits'), flex: 1),
+                        label: _editorText(context, '总计', 'Total'), flex: 1),
                   ],
                 ),
               ),
-              SizedBox(
-                height: 68,
-                child: Center(
-                  child: Text(
-                    _editorText(context, '暂无用量记录', 'No usage records'),
-                    style: TextStyle(color: colors.muted, fontSize: 13),
+              if (visibleRecords.isEmpty)
+                SizedBox(
+                  height: 68,
+                  child: Center(
+                    child: Text(
+                      _editorText(context, '暂无用量记录', 'No usage records'),
+                      style: TextStyle(color: colors.muted, fontSize: 13),
+                    ),
                   ),
-                ),
-              ),
+                )
+              else
+                for (final record in visibleRecords)
+                  _UsageRecordRow(record: record),
             ],
           ),
         ),
       ],
     );
   }
+}
+
+class _UsageRecordRow extends StatelessWidget {
+  const _UsageRecordRow({required this.record});
+
+  final AiUsageRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colors.line)),
+      ),
+      child: Row(
+        children: [
+          _UsageBodyCell(label: _formatUsageTime(record.createdAt), flex: 2),
+          _UsageBodyCell(
+            label: record.providerName.isEmpty
+                ? record.providerId
+                : record.providerName,
+            flex: 2,
+          ),
+          _UsageBodyCell(label: record.model, flex: 3),
+          _UsageBodyCell(
+            label: _formatUsageNumber(record.inputTokens),
+            flex: 1,
+          ),
+          _UsageBodyCell(
+            label: _formatUsageNumber(record.outputTokens),
+            flex: 1,
+          ),
+          _UsageBodyCell(
+            label: _formatUsageNumber(record.totalTokens),
+            flex: 1,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UsageBodyCell extends StatelessWidget {
+  const _UsageBodyCell({
+    required this.label,
+    required this.flex,
+  });
+
+  final String label;
+  final int flex;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    return Expanded(
+      flex: flex,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: colors.text, fontSize: 12),
+      ),
+    );
+  }
+}
+
+String _formatUsageTime(DateTime time) {
+  final local = time.toLocal();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
 }
 
 class _UsageHeaderCell extends StatelessWidget {

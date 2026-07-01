@@ -157,6 +157,7 @@ class _WebPreviewAppState extends State<WebPreviewApp> {
                         context.l10n.text('webPreview.importUnavailable'),
                       );
                     },
+                    loadUsageRecords: () async => const [],
                   ),
                   toggleTheme: () {
                     setState(() {

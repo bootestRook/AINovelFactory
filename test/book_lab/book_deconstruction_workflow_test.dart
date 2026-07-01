@@ -20,6 +20,10 @@ void main() {
         'book_quality_check',
       ],
     );
+    expect(
+      bookDeconstructionAgentIds,
+      isNot(contains('experimental_writing_agent')),
+    );
 
     final internalNodes = bookDeconstructionWorkflowNodes
         .where((node) => node.isInternal)

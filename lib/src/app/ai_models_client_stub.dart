@@ -5,7 +5,7 @@ Future<List<String>> fetchOpenAiCompatibleModels({
   throw const AiModelFetchException('This platform cannot fetch models.');
 }
 
-Future<String> createOpenAiCompatibleChatCompletion({
+Future<OpenAiCompatibleChatCompletion> createOpenAiCompatibleChatCompletion({
   required String apiKey,
   required String baseUrl,
   required String model,
@@ -23,4 +23,30 @@ class AiModelFetchException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class OpenAiCompatibleChatCompletion {
+  const OpenAiCompatibleChatCompletion({
+    required this.content,
+    required this.usage,
+  });
+
+  final String content;
+  final OpenAiCompatibleUsage? usage;
+}
+
+class OpenAiCompatibleUsage {
+  const OpenAiCompatibleUsage({
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.cacheReadTokens,
+    required this.cacheWriteTokens,
+    required this.totalTokens,
+  });
+
+  final int inputTokens;
+  final int outputTokens;
+  final int cacheReadTokens;
+  final int cacheWriteTokens;
+  final int totalTokens;
 }

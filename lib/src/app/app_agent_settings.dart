@@ -32,6 +32,7 @@ const defaultAgentDefinitions = [
           id: 'book_template_distillation', name: '09 模板蒸馏 Agent'),
       AppAgentDefinition(id: 'book_skill_compile', name: '10 Skill 编译 Agent'),
       AppAgentDefinition(id: 'book_quality_check', name: '11 拆书质检 Agent'),
+      AppAgentDefinition(id: 'experimental_writing_agent', name: '实验性写作 Agent'),
     ],
   ),
   AppAgentDefinition(id: 'world_builder', name: '世界观构建师'),

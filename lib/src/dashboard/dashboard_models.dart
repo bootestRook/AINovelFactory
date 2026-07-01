@@ -168,3 +168,19 @@ class BookDeconstructionProject {
   bool get hasNovel => novelId != null;
   bool get isRunning => status == BookDeconstructionProjectStatus.running;
 }
+
+class BookExperimentalWritingMessage {
+  const BookExperimentalWritingMessage({
+    required this.projectId,
+    required this.role,
+    required this.content,
+    required this.createdAt,
+  });
+
+  final int projectId;
+  final String role;
+  final String content;
+  final DateTime createdAt;
+
+  bool get isUser => role == 'user';
+}

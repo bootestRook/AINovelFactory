@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 
 import '../app/app_appearance.dart';
@@ -8,6 +9,15 @@ import '../app/app_localizations.dart';
 import '../app/app_theme.dart';
 import '../book_lab/book_deconstruction_workflow.dart';
 import 'dashboard_models.dart';
+
+typedef BookExperimentalMessageLoader
+    = Future<List<BookExperimentalWritingMessage>> Function(int projectId);
+typedef BookExperimentalMessageSender = Future<BookExperimentalWritingMessage>
+    Function(int projectId, String message);
+typedef BookExperimentalFinalDraftSaver = Future<void> Function(
+  int projectId,
+  String content,
+);
 
 class DashboardActions {
   const DashboardActions({
@@ -155,6 +165,7 @@ class BookDeconstructionScreen extends StatelessWidget {
     this.onOpenProjectFolder,
     this.onOpenProjectReport,
     this.onDeleteProject,
+    this.onOpenExperimentalWriting,
   });
 
   final DateTime today;
@@ -170,6 +181,7 @@ class BookDeconstructionScreen extends StatelessWidget {
   final ValueChanged<int>? onOpenProjectFolder;
   final ValueChanged<int>? onOpenProjectReport;
   final ValueChanged<int>? onDeleteProject;
+  final ValueChanged<int>? onOpenExperimentalWriting;
 
   @override
   Widget build(BuildContext context) {
@@ -231,6 +243,8 @@ class BookDeconstructionScreen extends StatelessWidget {
                             final primary = _BookBreakdownStartCard(
                               onImportNovel: onImportNovel,
                               onStartOrPause: onStartOrPause,
+                              onOpenExperimentalWriting:
+                                  onOpenExperimentalWriting,
                               project: currentProject,
                               nodeStatuses: nodeStatuses,
                             );
@@ -264,6 +278,7 @@ class BookDeconstructionScreen extends StatelessWidget {
                           currentProject: currentProject,
                           onImportNovel: onImportNovel,
                           onCreateProject: onCreateProject,
+                          onStartOrPause: onStartOrPause,
                           onSelectProject: onSelectProject,
                           onOpenProjectFolder: onOpenProjectFolder,
                           onOpenProjectReport: onOpenProjectReport,
@@ -278,6 +293,440 @@ class BookDeconstructionScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+Future<void> showBookExperimentalWritingDialog(
+  BuildContext context, {
+  required BookDeconstructionProject project,
+  required BookExperimentalMessageLoader loadMessages,
+  required BookExperimentalMessageSender onSendMessage,
+  required BookExperimentalFinalDraftSaver onSaveFinalDraft,
+}) {
+  final overlay = Overlay.of(context, rootOverlay: true);
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (context) => Center(
+      child: _BookExperimentalWritingDialog(
+        project: project,
+        loadMessages: loadMessages,
+        onSendMessage: onSendMessage,
+        onSaveFinalDraft: onSaveFinalDraft,
+        onClose: entry.remove,
+      ),
+    ),
+  );
+  overlay.insert(entry);
+  return Future.value();
+}
+
+class _BookExperimentalWritingDialog extends StatefulWidget {
+  const _BookExperimentalWritingDialog({
+    required this.project,
+    required this.loadMessages,
+    required this.onSendMessage,
+    required this.onSaveFinalDraft,
+    required this.onClose,
+  });
+
+  final BookDeconstructionProject project;
+  final BookExperimentalMessageLoader loadMessages;
+  final BookExperimentalMessageSender onSendMessage;
+  final BookExperimentalFinalDraftSaver onSaveFinalDraft;
+  final VoidCallback onClose;
+
+  @override
+  State<_BookExperimentalWritingDialog> createState() =>
+      _BookExperimentalWritingDialogState();
+}
+
+class _BookExperimentalWritingDialogState
+    extends State<_BookExperimentalWritingDialog> {
+  final _controller = TextEditingController();
+  final _scrollController = ScrollController();
+  List<BookExperimentalWritingMessage> _messages = const [];
+  var _loading = true;
+  var _sending = false;
+  var _saving = false;
+  String? _error;
+  String? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _scrollToLatest() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) {
+        return;
+      }
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  Future<void> _load() async {
+    try {
+      final messages = await widget.loadMessages(widget.project.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _messages = messages;
+        _loading = false;
+        _error = null;
+      });
+      _scrollToLatest();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _send() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _sending) {
+      return;
+    }
+    setState(() {
+      _sending = true;
+      _error = null;
+      _status = '已发送，正在构建 Skill 上下文并等待 Agent 回复。';
+      _messages = [
+        ..._messages,
+        BookExperimentalWritingMessage(
+          projectId: widget.project.id,
+          role: 'user',
+          content: text,
+          createdAt: DateTime.now(),
+        ),
+      ];
+    });
+    _controller.clear();
+    _scrollToLatest();
+    try {
+      await widget.onSendMessage(widget.project.id, text);
+      final messages = await widget.loadMessages(widget.project.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _messages = messages;
+        _status = '回复已保存。';
+      });
+      _scrollToLatest();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      List<BookExperimentalWritingMessage>? messages;
+      try {
+        messages = await widget.loadMessages(widget.project.id);
+      } catch (_) {
+        messages = null;
+      }
+      setState(() {
+        if (messages != null) {
+          _messages = messages;
+        }
+        _error = error.toString();
+        _status = '生成失败，用户消息已保留，可重试。';
+      });
+      _scrollToLatest();
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  Future<void> _saveFinalDraft() async {
+    final draft = _lastAgentDraft;
+    if (draft == null || _saving) {
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.onSaveFinalDraft(widget.project.id, draft.content);
+      if (mounted) {
+        widget.onClose();
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  BookExperimentalWritingMessage? get _lastAgentDraft {
+    for (final message in _messages.reversed) {
+      if (!message.isUser) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    final canSave = _lastAgentDraft != null && !_saving && !_sending;
+
+    return Dialog(
+      insetPadding: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900, maxHeight: 680),
+        child: SizedBox(
+          width: 900,
+          height: 680,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(22, 18, 14, 14),
+                child: Row(
+                  children: [
+                    Icon(Icons.science_outlined, color: colors.brand, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '实验性写作 Agent',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  color: colors.text,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '锁定项目：${widget.project.title}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: colors.muted, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '关闭',
+                      onPressed: widget.onClose,
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(height: 1, color: colors.line),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _BookExperimentalMessageList(
+                        messages: _messages,
+                        controller: _scrollController,
+                      ),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                  child: Text(
+                    _error!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              if (_status != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                  child: Text(
+                    _status!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: colors.muted, fontSize: 12),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    CallbackShortcuts(
+                      bindings: {
+                        const SingleActivator(LogicalKeyboardKey.enter): _send,
+                      },
+                      child: TextField(
+                        controller: _controller,
+                        minLines: 2,
+                        maxLines: 4,
+                        textInputAction: TextInputAction.newline,
+                        decoration: InputDecoration(
+                          hintText: '例如：自由发挥一个 1500 字都市奇幻开场，重点测试文风和节奏。',
+                          filled: true,
+                          fillColor: colors.background,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(color: colors.line),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(color: colors.line),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '敲定后会保存到本拆书项目的 experiments/final_draft.md。',
+                            style: TextStyle(color: colors.muted, fontSize: 12),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          onPressed: canSave ? _saveFinalDraft : null,
+                          icon: _saving
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.task_alt, size: 18),
+                          label: const Text('敲定为最终稿'),
+                        ),
+                        const SizedBox(width: 10),
+                        FilledButton.icon(
+                          onPressed: _sending ? null : _send,
+                          icon: _sending
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.send, size: 18),
+                          label: Text(_sending ? '生成中' : '发送'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BookExperimentalMessageList extends StatelessWidget {
+  const _BookExperimentalMessageList({
+    required this.messages,
+    required this.controller,
+  });
+
+  final List<BookExperimentalWritingMessage> messages;
+  final ScrollController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppPalette.of(context);
+    if (messages.isEmpty) {
+      return Center(
+        child: Text(
+          '还没有对话。先描述题材、字数、限制，或让 Agent 自由发挥。',
+          style: TextStyle(color: colors.muted),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      controller: controller,
+      padding: const EdgeInsets.all(18),
+      itemCount: messages.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final message = messages[index];
+        return Align(
+          alignment:
+              message.isUser ? Alignment.centerRight : Alignment.centerLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 650),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: message.isUser
+                    ? colors.text
+                    : colors.background.withValues(alpha: 0.8),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: message.isUser ? colors.text : colors.line,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    message.isUser ? '你' : '实验性写作 Agent',
+                    style: TextStyle(
+                      color: message.isUser ? colors.card : colors.brand,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SelectableText(
+                    message.content,
+                    style: TextStyle(
+                      color: message.isUser ? colors.card : colors.text,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -399,12 +848,14 @@ class _BookBreakdownStartCard extends StatelessWidget {
   const _BookBreakdownStartCard({
     this.onImportNovel,
     this.onStartOrPause,
+    this.onOpenExperimentalWriting,
     this.project,
     required this.nodeStatuses,
   });
 
   final VoidCallback? onImportNovel;
   final VoidCallback? onStartOrPause;
+  final ValueChanged<int>? onOpenExperimentalWriting;
   final BookDeconstructionProject? project;
   final Map<String, BookDeconstructionNodeStatus> nodeStatuses;
 
@@ -518,6 +969,13 @@ class _BookBreakdownStartCard extends StatelessWidget {
                   icon: Icons.upload_file,
                   label: context.l10n.text('action.importNovel'),
                   onPressed: onImportNovel ?? () {},
+                ),
+                _SecondaryButton(
+                  icon: Icons.science_outlined,
+                  label: '实验写作',
+                  onPressed: project == null
+                      ? () {}
+                      : () => onOpenExperimentalWriting?.call(project!.id),
                 ),
                 const SizedBox(width: 32),
                 _BookBreakdownPipeline(nodeStatuses: nodeStatuses),
@@ -1123,6 +1581,7 @@ class _BookBreakdownProjectsSection extends StatelessWidget {
     this.currentProject,
     this.onImportNovel,
     this.onCreateProject,
+    this.onStartOrPause,
     this.onSelectProject,
     this.onOpenProjectFolder,
     this.onOpenProjectReport,
@@ -1133,6 +1592,7 @@ class _BookBreakdownProjectsSection extends StatelessWidget {
   final BookDeconstructionProject? currentProject;
   final VoidCallback? onImportNovel;
   final VoidCallback? onCreateProject;
+  final VoidCallback? onStartOrPause;
   final ValueChanged<int>? onSelectProject;
   final ValueChanged<int>? onOpenProjectFolder;
   final ValueChanged<int>? onOpenProjectReport;
@@ -1232,6 +1692,7 @@ class _BookBreakdownProjectsSection extends StatelessWidget {
                             project: project,
                             isCurrent: project.id == currentProject?.id,
                             tableWidth: tableWidth,
+                            onStartOrPause: onStartOrPause,
                             onSelectProject: onSelectProject,
                             onOpenProjectFolder: onOpenProjectFolder,
                             onOpenProjectReport: onOpenProjectReport,
@@ -1300,6 +1761,7 @@ class _BookBreakdownProjectRow extends StatelessWidget {
     required this.project,
     required this.isCurrent,
     required this.tableWidth,
+    this.onStartOrPause,
     this.onSelectProject,
     this.onOpenProjectFolder,
     this.onOpenProjectReport,
@@ -1309,6 +1771,7 @@ class _BookBreakdownProjectRow extends StatelessWidget {
   final BookDeconstructionProject project;
   final bool isCurrent;
   final double tableWidth;
+  final VoidCallback? onStartOrPause;
   final ValueChanged<int>? onSelectProject;
   final ValueChanged<int>? onOpenProjectFolder;
   final ValueChanged<int>? onOpenProjectReport;
@@ -1371,8 +1834,12 @@ class _BookBreakdownProjectRow extends StatelessWidget {
                     if (project.status ==
                         BookDeconstructionProjectStatus.completed) {
                       onOpenProjectReport?.call(project.id);
+                    } else if (isCurrent &&
+                        project.status ==
+                            BookDeconstructionProjectStatus.paused) {
+                      onStartOrPause?.call();
                     } else {
-                      onOpenProjectFolder?.call(project.id);
+                      onSelectProject?.call(project.id);
                     }
                   },
                 ),

@@ -53,7 +53,7 @@ Future<List<String>> fetchOpenAiCompatibleModels({
   }
 }
 
-Future<String> createOpenAiCompatibleChatCompletion({
+Future<OpenAiCompatibleChatCompletion> createOpenAiCompatibleChatCompletion({
   required String apiKey,
   required String baseUrl,
   required String model,
@@ -97,10 +97,16 @@ Future<String> createOpenAiCompatibleChatCompletion({
         if (first is Map) {
           final message = first['message'];
           if (message is Map && message['content'] is String) {
-            return (message['content'] as String).trim();
+            return OpenAiCompatibleChatCompletion(
+              content: (message['content'] as String).trim(),
+              usage: OpenAiCompatibleUsage.fromJson(decoded['usage']),
+            );
           }
           if (first['text'] is String) {
-            return (first['text'] as String).trim();
+            return OpenAiCompatibleChatCompletion(
+              content: (first['text'] as String).trim(),
+              usage: OpenAiCompatibleUsage.fromJson(decoded['usage']),
+            );
           }
         }
       }
@@ -161,4 +167,78 @@ class AiModelFetchException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class OpenAiCompatibleChatCompletion {
+  const OpenAiCompatibleChatCompletion({
+    required this.content,
+    required this.usage,
+  });
+
+  final String content;
+  final OpenAiCompatibleUsage? usage;
+}
+
+class OpenAiCompatibleUsage {
+  const OpenAiCompatibleUsage({
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.cacheReadTokens,
+    required this.cacheWriteTokens,
+    required this.totalTokens,
+  });
+
+  final int inputTokens;
+  final int outputTokens;
+  final int cacheReadTokens;
+  final int cacheWriteTokens;
+  final int totalTokens;
+
+  static OpenAiCompatibleUsage? fromJson(Object? value) {
+    if (value is! Map) {
+      return null;
+    }
+    final promptTokens = _intValue(value['prompt_tokens']);
+    final completionTokens = _intValue(value['completion_tokens']);
+    final inputTokens = _intValue(value['input_tokens']) ?? promptTokens ?? 0;
+    final outputTokens =
+        _intValue(value['output_tokens']) ?? completionTokens ?? 0;
+    final details = value['prompt_tokens_details'];
+    final cacheReadTokens = _intValue(value['cache_read_input_tokens']) ??
+        _intValue(value['prompt_cache_hit_tokens']) ??
+        (details is Map ? _intValue(details['cached_tokens']) : null) ??
+        0;
+    final cacheWriteTokens = _intValue(value['cache_creation_input_tokens']) ??
+        _intValue(value['prompt_cache_miss_tokens']) ??
+        0;
+    final totalTokens = _intValue(value['total_tokens']) ??
+        inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+    if (inputTokens == 0 &&
+        outputTokens == 0 &&
+        cacheReadTokens == 0 &&
+        cacheWriteTokens == 0 &&
+        totalTokens == 0) {
+      return null;
+    }
+    return OpenAiCompatibleUsage(
+      inputTokens: inputTokens,
+      outputTokens: outputTokens,
+      cacheReadTokens: cacheReadTokens,
+      cacheWriteTokens: cacheWriteTokens,
+      totalTokens: totalTokens,
+    );
+  }
+}
+
+int? _intValue(Object? value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.round();
+  }
+  if (value is String) {
+    return int.tryParse(value);
+  }
+  return null;
 }

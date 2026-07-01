@@ -390,6 +390,7 @@ class _DashboardHomeState extends State<DashboardHome> {
               onOpenProjectFolder: _openBookDeconstructionProjectFolder,
               onOpenProjectReport: _openBookDeconstructionReport,
               onDeleteProject: _deleteBookDeconstructionProject,
+              onOpenExperimentalWriting: _openBookExperimentalWriting,
             )
           : DashboardScreen(
               key: const ValueKey('dashboard-screen'),
@@ -492,7 +493,8 @@ class _DashboardHomeState extends State<DashboardHome> {
     }
 
     try {
-      final novelId = await widget.repository.importNovelFile(file.path);
+      final novelId =
+          await widget.repository.importBookDeconstructionSourceFile(file.path);
       final current = _currentBookDeconstructionProject;
       final projectId = current?.id ??
           await widget.repository.createBookDeconstructionProject(
@@ -829,26 +831,125 @@ class _DashboardHomeState extends State<DashboardHome> {
         projectId: projectId,
         node: node,
       );
-      return _BookNodeRunResult(
-        content: await createOpenAiCompatibleChatCompletion(
-          apiKey: provider.apiKey.trim(),
-          baseUrl: provider.baseUrl.trim(),
-          model: model,
-          messages: [
-            {
-              'role': 'system',
-              'content': '你是严谨的中文长篇小说拆书专家。只依据用户提供的文本和上游产物分析，不编造不存在的情节。',
-            },
-            {
-              'role': 'user',
-              'content': prompt,
-            },
-          ],
-        ),
+      final completion = await createOpenAiCompatibleChatCompletion(
+        apiKey: provider.apiKey.trim(),
+        baseUrl: provider.baseUrl.trim(),
+        model: model,
+        messages: [
+          {
+            'role': 'system',
+            'content': '你是严谨的中文长篇小说拆书专家。只依据用户提供的文本和上游产物分析，不编造不存在的情节。',
+          },
+          {
+            'role': 'user',
+            'content': prompt,
+          },
+        ],
       );
+      final usage = completion.usage;
+      if (usage != null) {
+        await widget.repository.recordAiUsage(
+          providerId: provider.id,
+          providerName: _providerUsageLabel(provider),
+          model: model,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheReadTokens: usage.cacheReadTokens,
+          cacheWriteTokens: usage.cacheWriteTokens,
+          totalTokens: usage.totalTokens,
+        );
+      }
+      return _BookNodeRunResult(content: completion.content);
     } catch (error) {
       return _BookNodeRunResult(error: error);
     }
+  }
+
+  Future<void> _openBookExperimentalWriting(int projectId) async {
+    BookDeconstructionProject? project;
+    for (final candidate in _bookDeconstructionProjects) {
+      if (candidate.id == projectId) {
+        project = candidate;
+        break;
+      }
+    }
+    if (project == null) {
+      _showSnackBar('请先选择拆书项目。');
+      return;
+    }
+    await showBookExperimentalWritingDialog(
+      context,
+      project: project,
+      loadMessages: widget.repository.loadBookExperimentalWritingMessages,
+      onSendMessage: _sendBookExperimentalWritingMessage,
+      onSaveFinalDraft: (projectId, content) async {
+        await widget.repository.saveBookExperimentalWritingFinalDraft(
+          projectId: projectId,
+          content: content,
+        );
+        await _loadBookDeconstructionProjects(recoverInterrupted: false);
+        _showSnackBar('实验最终稿已保存到当前拆书项目。');
+      },
+    );
+  }
+
+  Future<BookExperimentalWritingMessage> _sendBookExperimentalWritingMessage(
+    int projectId,
+    String message,
+  ) async {
+    await widget.repository.appendBookExperimentalWritingMessage(
+      projectId: projectId,
+      role: 'user',
+      content: message,
+    );
+
+    final model = _modelForBookAgent('experimental_writing_agent');
+    final provider = model == null ? null : _providerForModel(model);
+    if (model == null || provider == null) {
+      throw StateError('请先在设置里为“实验性写作 Agent”或“拆书 Agent”选择可用模型。');
+    }
+
+    final prompt = await widget.repository.buildExperimentalWritingAgentPrompt(
+      projectId: projectId,
+      userMessage: message,
+    );
+    final completion = await createOpenAiCompatibleChatCompletion(
+      apiKey: provider.apiKey.trim(),
+      baseUrl: provider.baseUrl.trim(),
+      model: model,
+      messages: [
+        {
+          'role': 'system',
+          'content':
+              '你是独立实验性写作 Agent。只调用拆书项目生成的写作 Skill 做原创实验写作，不参与拆书，不读取 raw.txt，不复制原书剧情、人物或专有名词。输出前必须标明 Skill 命中规则。全文禁止出现“——”和“—”，不要写说明腔、解释腔、补充式解释。',
+        },
+        {
+          'role': 'user',
+          'content': prompt,
+        },
+      ],
+    ).timeout(
+      const Duration(seconds: 120),
+      onTimeout: () => throw TimeoutException('实验性写作 Agent 生成超时，请重试。'),
+    );
+    final usage = completion.usage;
+    if (usage != null) {
+      await widget.repository.recordAiUsage(
+        providerId: provider.id,
+        providerName: _providerUsageLabel(provider),
+        model: model,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        totalTokens: usage.totalTokens,
+      );
+    }
+    return widget.repository.appendBookExperimentalWritingMessage(
+      projectId: projectId,
+      role: 'assistant',
+      content: completion.content,
+    );
   }
 
   String? _modelForBookAgent(String agentId) {
@@ -878,6 +979,18 @@ class _DashboardHomeState extends State<DashboardHome> {
       }
     }
     return null;
+  }
+
+  String _providerUsageLabel(AppAiProviderSettings provider) {
+    final name = provider.name.trim();
+    if (name.isNotEmpty) {
+      return name;
+    }
+    final uri = Uri.tryParse(provider.baseUrl.trim());
+    if (uri != null && uri.host.isNotEmpty) {
+      return uri.host;
+    }
+    return provider.id;
   }
 
   void _showSnackBar(String message) {
@@ -953,6 +1066,7 @@ class _DashboardHomeState extends State<DashboardHome> {
         await widget.repository.restoreFromBackup(path);
         await _loadDashboard();
       },
+      loadUsageRecords: widget.repository.loadAiUsageRecords,
       showAgents: showAgents,
     );
   }
