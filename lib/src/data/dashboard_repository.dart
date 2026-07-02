@@ -83,6 +83,568 @@ class DashboardRepository {
     });
   }
 
+  Future<void> updateNovel({
+    required int novelId,
+    required String title,
+    String summary = '',
+    String category = '',
+    String workType = '',
+    List<String> tags = const [],
+    String? coverPath,
+  }) async {
+    final trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) {
+      throw ArgumentError.value(title, 'title', 'Title cannot be empty.');
+    }
+
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      await txn.update(
+        'novels',
+        {
+          'title': trimmedTitle,
+          'summary': summary.trim(),
+          'category': category.trim(),
+          'work_type': workType.trim(),
+          'cover_path':
+              coverPath?.trim().isEmpty ?? true ? null : coverPath!.trim(),
+          'updated_at': timestamp,
+        },
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+      await txn.delete(
+        'novel_tags',
+        where: 'novel_id = ?',
+        whereArgs: [novelId],
+      );
+      await _insertTags(txn, novelId, tags);
+    });
+  }
+
+  Future<void> updateNovelStatus({
+    required int novelId,
+    required String status,
+  }) async {
+    final db = await _open();
+    await db.update(
+      'novels',
+      {
+        'status': status.trim(),
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ? AND source_context = ?',
+      whereArgs: [novelId, _novelSourceWriting],
+    );
+  }
+
+  Future<void> deleteNovel(int novelId) async {
+    final db = await _open();
+    await db.delete(
+      'novels',
+      where: 'id = ? AND source_context = ?',
+      whereArgs: [novelId, _novelSourceWriting],
+    );
+  }
+
+  Future<void> recordRecentNovel(int novelId) async {
+    final db = await _open();
+    await db.insert(
+      'recent_writing',
+      {
+        'id': 1,
+        'novel_id': novelId,
+        'chapter_id': null,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<NovelChapter>> loadNovelChapters(int novelId) async {
+    final db = await _open();
+    final rows = await db.rawQuery(
+      '''
+SELECT c.id, c.novel_id, c.title, c.outline, c.content, c.word_count, c.updated_at
+FROM chapters c
+JOIN novels n ON n.id = c.novel_id
+WHERE c.novel_id = ? AND n.source_context = ?
+ORDER BY c.id ASC
+''',
+      [novelId, _novelSourceWriting],
+    );
+    return [for (final row in rows) _chapterFromRow(row)];
+  }
+
+  Future<List<NovelVolume>> loadNovelVolumes(int novelId) async {
+    final db = await _open();
+    final rows = await db.rawQuery(
+      '''
+SELECT v.id, v.novel_id, v.title, v.updated_at
+FROM novel_volumes v
+JOIN novels n ON n.id = v.novel_id
+WHERE v.novel_id = ? AND n.source_context = ?
+ORDER BY v.id ASC
+''',
+      [novelId, _novelSourceWriting],
+    );
+    return [for (final row in rows) _volumeFromRow(row)];
+  }
+
+  Future<NovelVolume> createNovelVolume({
+    required int novelId,
+    required String title,
+  }) async {
+    final cleanTitle = title.trim();
+    if (cleanTitle.isEmpty) {
+      throw ArgumentError.value(title, 'title', 'Title cannot be empty.');
+    }
+
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    late final int volumeId;
+    await db.transaction((txn) async {
+      volumeId = await txn.insert('novel_volumes', {
+        'novel_id': novelId,
+        'title': cleanTitle,
+        'updated_at': timestamp,
+      });
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+    });
+    final rows = await db.query(
+      'novel_volumes',
+      where: 'id = ? AND novel_id = ?',
+      whereArgs: [volumeId, novelId],
+      limit: 1,
+    );
+    return _volumeFromRow(rows.single);
+  }
+
+  Future<List<NovelOutline>> loadNovelOutlines(int novelId) async {
+    final db = await _open();
+    final rows = await db.rawQuery(
+      '''
+SELECT o.id, o.novel_id, o.title, o.status, o.content, o.beats_json, o.updated_at
+FROM novel_outlines o
+JOIN novels n ON n.id = o.novel_id
+WHERE o.novel_id = ? AND n.source_context = ?
+ORDER BY o.id ASC
+''',
+      [novelId, _novelSourceWriting],
+    );
+    return [for (final row in rows) _outlineFromRow(row)];
+  }
+
+  Future<List<NovelCharacter>> loadNovelCharacters(int novelId) async {
+    final db = await _open();
+    final rows = await db.rawQuery(
+      '''
+SELECT c.id, c.novel_id, c.name, c.role, c.gender, c.identity, c.age,
+       c.motivation, c.arc, c.avatar_path, c.gallery_paths,
+       c.first_chapter_id, c.biography, c.current_state, c.skills_json,
+       c.updated_at
+FROM novel_characters c
+JOIN novels n ON n.id = c.novel_id
+WHERE c.novel_id = ? AND n.source_context = ?
+ORDER BY c.id ASC
+''',
+      [novelId, _novelSourceWriting],
+    );
+    return [for (final row in rows) _characterFromRow(row)];
+  }
+
+  Future<NovelCharacter> saveNovelCharacter({
+    required int novelId,
+    required int? characterId,
+    required String name,
+    required String role,
+    required String gender,
+    required String identity,
+    required String age,
+    required String motivation,
+    required String arc,
+    required String? avatarPath,
+    required List<String> galleryPaths,
+    required int? firstChapterId,
+    required String biography,
+    required String currentState,
+    required List<NovelCharacterSkill> skills,
+  }) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final cleanName = name.trim().isEmpty ? '未命名' : name.trim();
+    final cleanGalleryPaths = [
+      for (final path in galleryPaths)
+        if (path.trim().isNotEmpty) path.trim(),
+    ];
+    final cleanSkills = [
+      for (final skill in skills)
+        if (skill.name.trim().isNotEmpty)
+          NovelCharacterSkill(
+            skillId: skill.skillId,
+            name: skill.name.trim(),
+            relation:
+                skill.relation.trim().isEmpty ? '已学会' : skill.relation.trim(),
+          ),
+    ];
+
+    late final int savedCharacterId;
+    await db.transaction((txn) async {
+      final values = {
+        'novel_id': novelId,
+        'name': cleanName,
+        'role': role.trim(),
+        'gender': gender.trim(),
+        'identity': identity.trim(),
+        'age': age.trim(),
+        'motivation': motivation.trim(),
+        'arc': arc.trim(),
+        'avatar_path':
+            avatarPath?.trim().isEmpty ?? true ? null : avatarPath!.trim(),
+        'gallery_paths': jsonEncode(cleanGalleryPaths),
+        'first_chapter_id': firstChapterId,
+        'biography': biography,
+        'current_state': currentState,
+        'skills_json': jsonEncode([
+          for (final skill in cleanSkills) skill.toJson(),
+        ]),
+        'updated_at': timestamp,
+      };
+      if (characterId == null) {
+        savedCharacterId = await txn.insert('novel_characters', values);
+      } else {
+        final updated = await txn.update(
+          'novel_characters',
+          values,
+          where: 'id = ? AND novel_id = ?',
+          whereArgs: [characterId, novelId],
+        );
+        if (updated == 0) {
+          throw ArgumentError.value(
+            characterId,
+            'characterId',
+            'Character not found.',
+          );
+        }
+        savedCharacterId = characterId;
+      }
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+    });
+    return _loadNovelCharacter(db, savedCharacterId);
+  }
+
+  Future<void> deleteNovelCharacter(int novelId, int characterId) async {
+    final db = await _open();
+    final deleted = await db.delete(
+      'novel_characters',
+      where: 'id = ? AND novel_id = ?',
+      whereArgs: [characterId, novelId],
+    );
+    if (deleted == 0) {
+      throw ArgumentError.value(
+          characterId, 'characterId', 'Character not found.');
+    }
+  }
+
+  Future<List<NovelForeshadowing>> loadNovelForeshadowings(int novelId) async {
+    final db = await _open();
+    final rows = await db.rawQuery(
+      '''
+SELECT f.id, f.novel_id, f.title, f.status, f.setup_content,
+       f.payoff_content, f.updated_at
+FROM novel_foreshadowings f
+JOIN novels n ON n.id = f.novel_id
+WHERE f.novel_id = ? AND n.source_context = ?
+ORDER BY f.updated_at DESC, f.id DESC
+''',
+      [novelId, _novelSourceWriting],
+    );
+    return [for (final row in rows) _foreshadowingFromRow(row)];
+  }
+
+  Future<NovelForeshadowing> saveNovelForeshadowing({
+    required int novelId,
+    required int? foreshadowingId,
+    required String title,
+    required String status,
+    required String setupContent,
+    required String payoffContent,
+  }) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final cleanTitle = title.trim().isEmpty ? '未命名伏笔' : title.trim();
+    final cleanStatus = status.trim().isEmpty ? '已埋设' : status.trim();
+    late final int savedForeshadowingId;
+
+    await db.transaction((txn) async {
+      final values = {
+        'novel_id': novelId,
+        'title': cleanTitle,
+        'status': cleanStatus,
+        'setup_content': setupContent,
+        'payoff_content': payoffContent,
+        'updated_at': timestamp,
+      };
+      if (foreshadowingId == null) {
+        savedForeshadowingId = await txn.insert(
+          'novel_foreshadowings',
+          values,
+        );
+      } else {
+        final updated = await txn.update(
+          'novel_foreshadowings',
+          values,
+          where: 'id = ? AND novel_id = ?',
+          whereArgs: [foreshadowingId, novelId],
+        );
+        if (updated == 0) {
+          throw ArgumentError.value(
+            foreshadowingId,
+            'foreshadowingId',
+            'Foreshadowing not found.',
+          );
+        }
+        savedForeshadowingId = foreshadowingId;
+      }
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+    });
+    return _loadNovelForeshadowing(db, savedForeshadowingId);
+  }
+
+  Future<void> deleteNovelForeshadowing(
+    int novelId,
+    int foreshadowingId,
+  ) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      final deleted = await txn.delete(
+        'novel_foreshadowings',
+        where: 'id = ? AND novel_id = ?',
+        whereArgs: [foreshadowingId, novelId],
+      );
+      if (deleted == 0) {
+        throw ArgumentError.value(
+          foreshadowingId,
+          'foreshadowingId',
+          'Foreshadowing not found.',
+        );
+      }
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+    });
+  }
+
+  Future<NovelOutline> saveNovelOutline({
+    required int novelId,
+    int? outlineId,
+    required String title,
+    required String status,
+    required String content,
+    String beatsJson = '[]',
+  }) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final cleanTitle = title.trim().isEmpty ? '未命名' : title.trim();
+    final cleanStatus = status.trim().isEmpty ? '待开始' : status.trim();
+    late final int savedOutlineId;
+
+    await db.transaction((txn) async {
+      if (outlineId == null) {
+        savedOutlineId = await txn.insert('novel_outlines', {
+          'novel_id': novelId,
+          'title': cleanTitle,
+          'status': cleanStatus,
+          'content': content,
+          'beats_json': beatsJson,
+          'updated_at': timestamp,
+        });
+      } else {
+        final updated = await txn.update(
+          'novel_outlines',
+          {
+            'title': cleanTitle,
+            'status': cleanStatus,
+            'content': content,
+            'beats_json': beatsJson,
+            'updated_at': timestamp,
+          },
+          where: 'id = ? AND novel_id = ?',
+          whereArgs: [outlineId, novelId],
+        );
+        if (updated == 0) {
+          throw ArgumentError.value(
+            outlineId,
+            'outlineId',
+            'Outline not found.',
+          );
+        }
+        savedOutlineId = outlineId;
+      }
+
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+    });
+
+    final rows = await db.query(
+      'novel_outlines',
+      where: 'id = ? AND novel_id = ?',
+      whereArgs: [savedOutlineId, novelId],
+      limit: 1,
+    );
+    return _outlineFromRow(rows.single);
+  }
+
+  Future<void> deleteNovelOutline(int novelId, int outlineId) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'novel_outlines',
+        where: 'id = ? AND novel_id = ?',
+        whereArgs: [outlineId, novelId],
+      );
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+    });
+  }
+
+  Future<NovelChapter> saveNovelChapter({
+    required int novelId,
+    int? chapterId,
+    required String title,
+    required String outline,
+    required String content,
+  }) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final cleanTitle = title.trim().isEmpty ? '章节标题' : title.trim();
+    final wordCount = countWritingUnits(content);
+    late final int savedChapterId;
+
+    await db.transaction((txn) async {
+      if (chapterId == null) {
+        savedChapterId = await txn.insert('chapters', {
+          'novel_id': novelId,
+          'title': cleanTitle,
+          'outline': outline,
+          'content': content,
+          'word_count': wordCount,
+          'updated_at': timestamp,
+        });
+      } else {
+        final updated = await txn.update(
+          'chapters',
+          {
+            'title': cleanTitle,
+            'outline': outline,
+            'content': content,
+            'word_count': wordCount,
+            'updated_at': timestamp,
+          },
+          where: 'id = ? AND novel_id = ?',
+          whereArgs: [chapterId, novelId],
+        );
+        if (updated == 0) {
+          throw ArgumentError.value(
+              chapterId, 'chapterId', 'Chapter not found.');
+        }
+        savedChapterId = chapterId;
+      }
+
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+      await txn.insert(
+        'recent_writing',
+        {
+          'id': 1,
+          'novel_id': novelId,
+          'chapter_id': savedChapterId,
+          'updated_at': timestamp,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
+
+    return _loadNovelChapter(db, savedChapterId);
+  }
+
+  Future<void> recordRecentChapter(int novelId, int chapterId) async {
+    final db = await _open();
+    await db.insert(
+      'recent_writing',
+      {
+        'id': 1,
+        'novel_id': novelId,
+        'chapter_id': chapterId,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> deleteNovelChapter(int novelId, int chapterId) async {
+    final db = await _open();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      final deleted = await txn.delete(
+        'chapters',
+        where: 'id = ? AND novel_id = ?',
+        whereArgs: [chapterId, novelId],
+      );
+      if (deleted == 0) {
+        throw ArgumentError.value(chapterId, 'chapterId', 'Chapter not found.');
+      }
+      await txn.update(
+        'novels',
+        {'updated_at': timestamp},
+        where: 'id = ? AND source_context = ?',
+        whereArgs: [novelId, _novelSourceWriting],
+      );
+      await txn.update(
+        'recent_writing',
+        {
+          'chapter_id': null,
+          'updated_at': timestamp,
+        },
+        where: 'novel_id = ? AND chapter_id = ?',
+        whereArgs: [novelId, chapterId],
+      );
+    });
+  }
+
   Future<int> importTextNovel(String filePath) async {
     return importNovelFile(filePath);
   }
@@ -920,7 +1482,7 @@ LIMIT 1
     final database = await _databaseFactory.openDatabase(
       _databasePath,
       options: OpenDatabaseOptions(
-        version: 7,
+        version: 13,
         onCreate: (db, version) async {
           await db.execute('''
 CREATE TABLE novels (
@@ -940,6 +1502,7 @@ CREATE TABLE chapters (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   novel_id INTEGER NOT NULL,
   title TEXT NOT NULL,
+  outline TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL DEFAULT '',
   word_count INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
@@ -980,6 +1543,10 @@ CREATE TABLE novel_tags (
           await _createBookDeconstructionTables(db);
           await _createAiUsageTables(db);
           await _createBookExperimentalWritingTables(db);
+          await _createNovelVolumeTables(db);
+          await _createNovelOutlineTables(db);
+          await _createNovelCharacterTables(db);
+          await _createNovelForeshadowingTables(db);
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
@@ -1014,6 +1581,28 @@ CREATE TABLE novel_tags (
           }
           if (oldVersion < 7) {
             await _createBookExperimentalWritingTables(db);
+          }
+          if (oldVersion < 8) {
+            await db.execute(
+              "ALTER TABLE chapters ADD COLUMN outline TEXT NOT NULL DEFAULT ''",
+            );
+          }
+          if (oldVersion < 9) {
+            await _createNovelVolumeTables(db);
+          }
+          if (oldVersion < 10) {
+            await _createNovelOutlineTables(db);
+          }
+          if (oldVersion < 11) {
+            await db.execute(
+              "ALTER TABLE novel_outlines ADD COLUMN beats_json TEXT NOT NULL DEFAULT '[]'",
+            );
+          }
+          if (oldVersion < 12) {
+            await _createNovelCharacterTables(db);
+          }
+          if (oldVersion < 13) {
+            await _createNovelForeshadowingTables(db);
           }
         },
       ),
@@ -1104,6 +1693,83 @@ CREATE TABLE book_experimental_writing_messages (
   FOREIGN KEY (project_id) REFERENCES book_deconstruction_projects(id)
     ON DELETE CASCADE
 )
+''');
+  }
+
+  static Future<void> _createNovelVolumeTables(DatabaseExecutor db) async {
+    await db.execute('''
+CREATE TABLE novel_volumes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  novel_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+)
+''');
+  }
+
+  static Future<void> _createNovelOutlineTables(DatabaseExecutor db) async {
+    await db.execute('''
+CREATE TABLE novel_outlines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  novel_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT '待开始',
+  content TEXT NOT NULL DEFAULT '',
+  beats_json TEXT NOT NULL DEFAULT '[]',
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+)
+''');
+  }
+
+  static Future<void> _createNovelCharacterTables(DatabaseExecutor db) async {
+    await db.execute('''
+CREATE TABLE novel_characters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  novel_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT '',
+  gender TEXT NOT NULL DEFAULT '',
+  identity TEXT NOT NULL DEFAULT '',
+  age TEXT NOT NULL DEFAULT '',
+  motivation TEXT NOT NULL DEFAULT '',
+  arc TEXT NOT NULL DEFAULT '',
+  avatar_path TEXT,
+  gallery_paths TEXT NOT NULL DEFAULT '[]',
+  first_chapter_id INTEGER,
+  biography TEXT NOT NULL DEFAULT '',
+  current_state TEXT NOT NULL DEFAULT '',
+  skills_json TEXT NOT NULL DEFAULT '[]',
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE,
+  FOREIGN KEY (first_chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+)
+''');
+    await db.execute('''
+CREATE INDEX novel_characters_novel_id_idx
+ON novel_characters(novel_id)
+''');
+  }
+
+  static Future<void> _createNovelForeshadowingTables(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute('''
+CREATE TABLE novel_foreshadowings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  novel_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT '已埋设',
+  setup_content TEXT NOT NULL DEFAULT '',
+  payoff_content TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+)
+''');
+    await db.execute('''
+CREATE INDEX novel_foreshadowings_novel_id_idx
+ON novel_foreshadowings(novel_id)
 ''');
   }
 
@@ -1503,6 +2169,153 @@ ORDER BY n.updated_at DESC, n.id DESC
         'position': position++,
       });
     }
+  }
+
+  Future<NovelChapter> _loadNovelChapter(Database db, int chapterId) async {
+    final rows = await db.query(
+      'chapters',
+      columns: [
+        'id',
+        'novel_id',
+        'title',
+        'outline',
+        'content',
+        'word_count',
+        'updated_at',
+      ],
+      where: 'id = ?',
+      whereArgs: [chapterId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      throw StateError('Chapter disappeared after save.');
+    }
+    return _chapterFromRow(rows.single);
+  }
+
+  Future<NovelCharacter> _loadNovelCharacter(
+    Database db,
+    int characterId,
+  ) async {
+    final rows = await db.query(
+      'novel_characters',
+      columns: [
+        'id',
+        'novel_id',
+        'name',
+        'role',
+        'gender',
+        'identity',
+        'age',
+        'motivation',
+        'arc',
+        'avatar_path',
+        'gallery_paths',
+        'first_chapter_id',
+        'biography',
+        'current_state',
+        'skills_json',
+        'updated_at',
+      ],
+      where: 'id = ?',
+      whereArgs: [characterId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      throw StateError('Character disappeared after save.');
+    }
+    return _characterFromRow(rows.single);
+  }
+
+  Future<NovelForeshadowing> _loadNovelForeshadowing(
+    Database db,
+    int foreshadowingId,
+  ) async {
+    final rows = await db.query(
+      'novel_foreshadowings',
+      columns: [
+        'id',
+        'novel_id',
+        'title',
+        'status',
+        'setup_content',
+        'payoff_content',
+        'updated_at',
+      ],
+      where: 'id = ?',
+      whereArgs: [foreshadowingId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      throw StateError('Foreshadowing disappeared after save.');
+    }
+    return _foreshadowingFromRow(rows.single);
+  }
+
+  NovelChapter _chapterFromRow(Map<String, Object?> row) {
+    return NovelChapter(
+      id: row['id'] as int,
+      novelId: row['novel_id'] as int,
+      title: row['title'] as String,
+      outline: row['outline'] as String? ?? '',
+      content: row['content'] as String,
+      wordCount: row['word_count'] as int,
+      updatedAt: _fromTimestamp(row['updated_at'] as int),
+    );
+  }
+
+  NovelVolume _volumeFromRow(Map<String, Object?> row) {
+    return NovelVolume(
+      id: row['id'] as int,
+      novelId: row['novel_id'] as int,
+      title: row['title'] as String,
+      updatedAt: _fromTimestamp(row['updated_at'] as int),
+    );
+  }
+
+  NovelOutline _outlineFromRow(Map<String, Object?> row) {
+    return NovelOutline(
+      id: row['id'] as int,
+      novelId: row['novel_id'] as int,
+      title: row['title'] as String,
+      status: row['status'] as String,
+      content: row['content'] as String,
+      beatsJson: row['beats_json'] as String? ?? '[]',
+      updatedAt: _fromTimestamp(row['updated_at'] as int),
+    );
+  }
+
+  NovelCharacter _characterFromRow(Map<String, Object?> row) {
+    return NovelCharacter(
+      id: row['id'] as int,
+      novelId: row['novel_id'] as int,
+      name: row['name'] as String,
+      role: row['role'] as String? ?? '',
+      gender: row['gender'] as String? ?? '',
+      identity: row['identity'] as String? ?? '',
+      age: row['age'] as String? ?? '',
+      motivation: row['motivation'] as String? ?? '',
+      arc: row['arc'] as String? ?? '',
+      avatarPath: row['avatar_path'] as String?,
+      galleryPaths: _stringListFromJson(row['gallery_paths'] as String?),
+      firstChapterId: row['first_chapter_id'] as int?,
+      biography: row['biography'] as String? ?? '',
+      currentState: row['current_state'] as String? ?? '',
+      skills: _characterSkillsFromJson(row['skills_json'] as String?),
+      updatedAt: _fromTimestamp(row['updated_at'] as int),
+    );
+  }
+
+  NovelForeshadowing _foreshadowingFromRow(Map<String, Object?> row) {
+    return NovelForeshadowing(
+      id: row['id'] as int,
+      novelId: row['novel_id'] as int,
+      title: row['title'] as String,
+      status: row['status'] as String? ?? '已埋设',
+      setupContent: row['setup_content'] as String? ?? '',
+      payoffContent: row['payoff_content'] as String? ?? '',
+      updatedAt: _fromTimestamp(row['updated_at'] as int),
+    );
   }
 
   Future<int> _loadTotalWordCount(Database db) async {
@@ -2323,6 +3136,35 @@ String _extensionOf(String path) {
 
 DateTime _fromTimestamp(int timestamp) {
   return DateTime.fromMillisecondsSinceEpoch(timestamp);
+}
+
+List<String> _stringListFromJson(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return const [];
+  }
+  final decoded = jsonDecode(value);
+  if (decoded is! List) {
+    return const [];
+  }
+  return [
+    for (final item in decoded)
+      if (item is String && item.trim().isNotEmpty) item.trim(),
+  ];
+}
+
+List<NovelCharacterSkill> _characterSkillsFromJson(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return const [];
+  }
+  final decoded = jsonDecode(value);
+  if (decoded is! List) {
+    return const [];
+  }
+  return [
+    for (final item in decoded)
+      if (NovelCharacterSkill.fromJson(item).name.isNotEmpty)
+        NovelCharacterSkill.fromJson(item),
+  ];
 }
 
 BookDeconstructionProjectStatus _parseBookProjectStatus(String value) {

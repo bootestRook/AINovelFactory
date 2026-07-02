@@ -34,6 +34,221 @@ class NovelSummary {
   final int wordCount;
 }
 
+class NovelChapter {
+  const NovelChapter({
+    required this.id,
+    required this.novelId,
+    required this.title,
+    required this.outline,
+    required this.content,
+    required this.wordCount,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final int novelId;
+  final String title;
+  final String outline;
+  final String content;
+  final int wordCount;
+  final DateTime updatedAt;
+
+  NovelChapter copyWith({
+    String? title,
+    String? outline,
+    String? content,
+    int? wordCount,
+    DateTime? updatedAt,
+  }) {
+    return NovelChapter(
+      id: id,
+      novelId: novelId,
+      title: title ?? this.title,
+      outline: outline ?? this.outline,
+      content: content ?? this.content,
+      wordCount: wordCount ?? this.wordCount,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+}
+
+class NovelVolume {
+  const NovelVolume({
+    required this.id,
+    required this.novelId,
+    required this.title,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final int novelId;
+  final String title;
+  final DateTime updatedAt;
+}
+
+class NovelOutline {
+  const NovelOutline({
+    required this.id,
+    required this.novelId,
+    required this.title,
+    required this.status,
+    required this.content,
+    this.beatsJson = '[]',
+    required this.updatedAt,
+  });
+
+  final int id;
+  final int novelId;
+  final String title;
+  final String status;
+  final String content;
+  final String beatsJson;
+  final DateTime updatedAt;
+
+  NovelOutline copyWith({
+    String? title,
+    String? status,
+    String? content,
+    String? beatsJson,
+    DateTime? updatedAt,
+  }) {
+    return NovelOutline(
+      id: id,
+      novelId: novelId,
+      title: title ?? this.title,
+      status: status ?? this.status,
+      content: content ?? this.content,
+      beatsJson: beatsJson ?? this.beatsJson,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+}
+
+class NovelCharacterSkill {
+  const NovelCharacterSkill({
+    required this.name,
+    required this.relation,
+    this.skillId,
+  });
+
+  final int? skillId;
+  final String name;
+  final String relation;
+
+  Map<String, Object> toJson() => {
+        if (skillId != null) 'skillId': skillId!,
+        'name': name,
+        'relation': relation,
+      };
+
+  static NovelCharacterSkill fromJson(Object? value) {
+    if (value is! Map) {
+      return const NovelCharacterSkill(name: '', relation: '已学会');
+    }
+    return NovelCharacterSkill(
+      skillId: value['skillId'] as int?,
+      name: (value['name'] as String? ?? '').trim(),
+      relation: (value['relation'] as String? ?? '已学会').trim(),
+    );
+  }
+}
+
+class NovelCharacter {
+  const NovelCharacter({
+    required this.id,
+    required this.novelId,
+    required this.name,
+    required this.role,
+    required this.gender,
+    required this.identity,
+    required this.age,
+    required this.motivation,
+    required this.arc,
+    required this.avatarPath,
+    required this.galleryPaths,
+    required this.firstChapterId,
+    required this.biography,
+    required this.currentState,
+    required this.skills,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final int novelId;
+  final String name;
+  final String role;
+  final String gender;
+  final String identity;
+  final String age;
+  final String motivation;
+  final String arc;
+  final String? avatarPath;
+  final List<String> galleryPaths;
+  final int? firstChapterId;
+  final String biography;
+  final String currentState;
+  final List<NovelCharacterSkill> skills;
+  final DateTime updatedAt;
+
+  NovelCharacter copyWith({
+    String? name,
+    String? role,
+    String? gender,
+    String? identity,
+    String? age,
+    String? motivation,
+    String? arc,
+    String? avatarPath,
+    List<String>? galleryPaths,
+    int? firstChapterId,
+    bool clearFirstChapter = false,
+    String? biography,
+    String? currentState,
+    List<NovelCharacterSkill>? skills,
+    DateTime? updatedAt,
+  }) {
+    return NovelCharacter(
+      id: id,
+      novelId: novelId,
+      name: name ?? this.name,
+      role: role ?? this.role,
+      gender: gender ?? this.gender,
+      identity: identity ?? this.identity,
+      age: age ?? this.age,
+      motivation: motivation ?? this.motivation,
+      arc: arc ?? this.arc,
+      avatarPath: avatarPath ?? this.avatarPath,
+      galleryPaths: galleryPaths ?? this.galleryPaths,
+      firstChapterId:
+          clearFirstChapter ? null : firstChapterId ?? this.firstChapterId,
+      biography: biography ?? this.biography,
+      currentState: currentState ?? this.currentState,
+      skills: skills ?? this.skills,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+}
+
+class NovelForeshadowing {
+  const NovelForeshadowing({
+    required this.id,
+    required this.novelId,
+    required this.title,
+    required this.status,
+    required this.setupContent,
+    required this.payoffContent,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final int novelId;
+  final String title;
+  final String status;
+  final String setupContent;
+  final String payoffContent;
+  final DateTime updatedAt;
+}
+
 class WritingGoalSummary {
   const WritingGoalSummary({
     required this.targetWords,

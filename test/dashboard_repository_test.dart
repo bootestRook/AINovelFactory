@@ -32,6 +32,293 @@ void main() {
     expect(data.novels.single.tags, ['AI', '赛博']);
   });
 
+  test('recordRecentNovel stores the last opened novel', () async {
+    final dir = await Directory.systemTemp.createTemp('ainovel_recent_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    await repository.createNovel(title: 'First');
+    final secondId = await repository.createNovel(title: 'Second');
+
+    await repository.recordRecentNovel(secondId);
+
+    final data = await repository.loadDashboard();
+    expect(data.recentWriting?.novelId, secondId);
+    expect(data.recentWriting?.novelTitle, 'Second');
+  });
+
+  test('saveNovelChapter stores outline content and recent chapter', () async {
+    final dir = await Directory.systemTemp.createTemp('ainovel_chapter_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Draft Book');
+
+    final first = await repository.saveNovelChapter(
+      novelId: novelId,
+      chapterId: null,
+      title: '第1章',
+      outline: '开场',
+      content: '正文',
+    );
+    final second = await repository.saveNovelChapter(
+      novelId: novelId,
+      chapterId: null,
+      title: '第2章',
+      outline: '推进',
+      content: '更多正文',
+    );
+
+    final chapters = await repository.loadNovelChapters(novelId);
+    expect(chapters.map((chapter) => chapter.id), [first.id, second.id]);
+    expect(chapters.last.outline, '推进');
+    expect(chapters.last.wordCount, countWritingUnits('更多正文'));
+
+    final dashboard = await repository.loadDashboard();
+    expect(dashboard.recentWriting?.chapterId, second.id);
+    expect(dashboard.recentWriting?.chapterTitle, '第2章');
+  });
+
+  test('deleteNovelChapter removes chapter and clears recent chapter',
+      () async {
+    final dir =
+        await Directory.systemTemp.createTemp('ainovel_delete_chapter_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Draft Book');
+    final chapter = await repository.saveNovelChapter(
+      novelId: novelId,
+      chapterId: null,
+      title: '第1章',
+      outline: '',
+      content: '正文',
+    );
+
+    await repository.deleteNovelChapter(novelId, chapter.id);
+
+    expect(await repository.loadNovelChapters(novelId), isEmpty);
+    final dashboard = await repository.loadDashboard();
+    expect(dashboard.recentWriting?.chapterId, isNull);
+  });
+
+  test('createNovelVolume stores volume names', () async {
+    final dir =
+        await Directory.systemTemp.createTemp('ainovel_create_volume_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Draft Book');
+
+    final volume = await repository.createNovelVolume(
+      novelId: novelId,
+      title: '第一卷',
+    );
+
+    final volumes = await repository.loadNovelVolumes(novelId);
+    expect(volumes.map((volume) => volume.title), ['第一卷']);
+    expect(volumes.single.id, volume.id);
+  });
+
+  test('saveNovelOutline stores outline content and status', () async {
+    final dir =
+        await Directory.systemTemp.createTemp('ainovel_save_outline_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Draft Book');
+
+    final outline = await repository.saveNovelOutline(
+      novelId: novelId,
+      outlineId: null,
+      title: '未命名',
+      status: '待开始',
+      content: '核心主题',
+      beatsJson: '[{"title":"节拍 1"}]',
+    );
+
+    final outlines = await repository.loadNovelOutlines(novelId);
+    expect(outlines.map((outline) => outline.id), [outline.id]);
+    expect(outlines.single.title, '未命名');
+    expect(outlines.single.status, '待开始');
+    expect(outlines.single.content, '核心主题');
+    expect(outlines.single.beatsJson, '[{"title":"节拍 1"}]');
+  });
+
+  test('deleteNovelOutline removes saved outline', () async {
+    final dir =
+        await Directory.systemTemp.createTemp('ainovel_delete_outline_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Draft Book');
+    final outline = await repository.saveNovelOutline(
+      novelId: novelId,
+      outlineId: null,
+      title: '世界地图',
+      status: '世界',
+      content: '地图说明',
+      beatsJson: '{"kind":"map_world"}',
+    );
+
+    await repository.deleteNovelOutline(novelId, outline.id);
+
+    expect(await repository.loadNovelOutlines(novelId), isEmpty);
+  });
+
+  test('saveNovelCharacter stores structured character data', () async {
+    final dir =
+        await Directory.systemTemp.createTemp('ainovel_character_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Draft Book');
+    final chapter = await repository.saveNovelChapter(
+      novelId: novelId,
+      chapterId: null,
+      title: '第1章',
+      outline: '',
+      content: '林默出场。',
+    );
+
+    final character = await repository.saveNovelCharacter(
+      novelId: novelId,
+      characterId: null,
+      name: '林默',
+      role: '主角',
+      gender: '男',
+      identity: '网络作家',
+      age: '25',
+      motivation: '提前打造 AI 写作平台',
+      arc: '回避到直面',
+      avatarPath: 'avatar.png',
+      galleryPaths: const ['a.png', 'b.png'],
+      firstChapterId: chapter.id,
+      biography: '一位来自 2025 年的网络作家。',
+      currentState: '正在搭建 Mirroric。',
+      skills: const [
+        NovelCharacterSkill(skillId: 7, name: 'AI 核心算法', relation: '创造者'),
+      ],
+    );
+
+    final characters = await repository.loadNovelCharacters(novelId);
+    expect(characters.map((item) => item.id), [character.id]);
+    expect(characters.single.name, '林默');
+    expect(characters.single.firstChapterId, chapter.id);
+    expect(characters.single.galleryPaths, ['a.png', 'b.png']);
+    expect(characters.single.skills.single.skillId, 7);
+    expect(characters.single.skills.single.name, 'AI 核心算法');
+    expect(characters.single.skills.single.relation, '创造者');
+  });
+
+  test('saveNovelForeshadowing stores setup and payoff content', () async {
+    final dir =
+        await Directory.systemTemp.createTemp('ainovel_foreshadowing_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Draft Book');
+    final first = await repository.saveNovelForeshadowing(
+      novelId: novelId,
+      foreshadowingId: null,
+      title: '旧相机',
+      status: '已埋设',
+      setupContent: '第 1 章出现旧相机。',
+      payoffContent: '',
+    );
+
+    final updated = await repository.saveNovelForeshadowing(
+      novelId: novelId,
+      foreshadowingId: first.id,
+      title: '旧相机',
+      status: '已兑现',
+      setupContent: '第 1 章出现旧相机。',
+      payoffContent: '第 12 章揭示相机里有关键照片。',
+    );
+
+    var foreshadowings = await repository.loadNovelForeshadowings(novelId);
+    expect(foreshadowings.map((item) => item.id), [first.id]);
+    expect(foreshadowings.single.status, '已兑现');
+    expect(foreshadowings.single.payoffContent, updated.payoffContent);
+
+    await repository.deleteNovelForeshadowing(novelId, first.id);
+    foreshadowings = await repository.loadNovelForeshadowings(novelId);
+    expect(foreshadowings, isEmpty);
+  });
+
+  test('updateNovel edits info and tags', () async {
+    final dir = await Directory.systemTemp.createTemp('ainovel_update_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(
+      title: 'Draft',
+      tags: const ['old'],
+    );
+
+    await repository.updateNovel(
+      novelId: novelId,
+      title: 'Final',
+      summary: 'Updated summary',
+      category: 'Sci-fi',
+      workType: 'Original',
+      tags: const ['AI', 'demo'],
+    );
+
+    final novel = (await repository.loadDashboard()).novels.single;
+    expect(novel.title, 'Final');
+    expect(novel.summary, 'Updated summary');
+    expect(novel.category, 'Sci-fi');
+    expect(novel.workType, 'Original');
+    expect(novel.tags, ['AI', 'demo']);
+  });
+
+  test('updateNovelStatus and deleteNovel persist project state', () async {
+    final dir = await Directory.systemTemp.createTemp('ainovel_status_test_');
+    addTearDown(() => dir.delete(recursive: true));
+    final repository = DashboardRepository.local(
+      databasePath: '${dir.path}${Platform.pathSeparator}test.sqlite',
+    );
+    addTearDown(repository.close);
+
+    final novelId = await repository.createNovel(title: 'Stateful');
+
+    await repository.updateNovelStatus(novelId: novelId, status: '已完本');
+    var data = await repository.loadDashboard();
+    expect(data.novels.single.status, '已完本');
+
+    await repository.deleteNovel(novelId);
+    data = await repository.loadDashboard();
+    expect(data.novels, isEmpty);
+  });
+
   test('importNovelFile supports text markdown html and epub', () async {
     final dir = await Directory.systemTemp.createTemp('ainovel_import_test_');
     addTearDown(() => dir.delete(recursive: true));

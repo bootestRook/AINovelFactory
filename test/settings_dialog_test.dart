@@ -119,6 +119,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('拆书 Agent'), findsOneWidget);
+    expect(find.text('00 拆书总控 Agent'), findsNothing);
+    expect(find.text('01 文本清洗 Agent'), findsNothing);
     expect(find.text('世界观构建师'), findsOneWidget);
     expect(find.text('正文写手'), findsOneWidget);
     expect(find.text('读者模拟'), findsOneWidget);
@@ -176,6 +178,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('model-b'), findsWidgets);
+    expect(find.text('00 拆书总控 Agent'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('agent-expand-book_breakdown')));
+    await tester.pumpAndSettle();
+
     expect(find.text('00 拆书总控 Agent'), findsOneWidget);
     expect(find.text('01 文本清洗 Agent'), findsOneWidget);
     expect(find.text('11 拆书质检 Agent'), findsOneWidget);

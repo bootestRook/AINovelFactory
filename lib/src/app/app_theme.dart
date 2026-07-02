@@ -194,6 +194,15 @@ class AppTheme {
         elevation: 16,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: palette.card,
+        surfaceTintColor: Colors.transparent,
+        elevation: 8,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: palette.line),
+        ),
+      ),
       inputDecorationTheme: InputDecorationThemeData(
         filled: true,
         fillColor: palette.card,

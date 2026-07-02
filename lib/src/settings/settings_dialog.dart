@@ -608,7 +608,7 @@ class _AgentModelSettingsPage extends StatefulWidget {
 }
 
 class _AgentModelSettingsPageState extends State<_AgentModelSettingsPage> {
-  final _expandedAgentIds = <String>{'book_breakdown'};
+  final _expandedAgentIds = <String>{};
 
   @override
   Widget build(BuildContext context) {

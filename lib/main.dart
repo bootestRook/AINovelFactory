@@ -260,6 +260,7 @@ class _DashboardHomeState extends State<DashboardHome> {
   final _searchController = TextEditingController();
   DashboardViewState _state = DashboardViewState.loading();
   String? _error;
+  NovelSummary? _activeNovel;
   bool _showBookDeconstruction = false;
   List<BookDeconstructionProject> _bookDeconstructionProjects = const [];
   int? _activeBookDeconstructionProjectId;
@@ -313,10 +314,12 @@ class _DashboardHomeState extends State<DashboardHome> {
         return;
       }
       setState(() {
-        _state = mapDashboardData(data);
+        final nextState = mapDashboardData(data);
+        _state = nextState;
         _bookDeconstructionProjects = bookProjects;
         _activeBookDeconstructionProjectId =
             _nextActiveBookProjectId(bookProjects);
+        _activeNovel = _updatedActiveNovel(nextState);
         _error = null;
       });
     } catch (error) {
@@ -362,10 +365,10 @@ class _DashboardHomeState extends State<DashboardHome> {
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
       transitionBuilder: (child, animation) {
-        final enteringBreakdown =
-            child.key == const ValueKey('book-deconstruction-screen');
+        final enteringWorkspace =
+            child.key != const ValueKey('dashboard-screen');
         final offset =
-            enteringBreakdown ? const Offset(1, 0) : const Offset(-1, 0);
+            enteringWorkspace ? const Offset(1, 0) : const Offset(-1, 0);
         return SlideTransition(
           position: Tween<Offset>(
             begin: offset,
@@ -374,38 +377,66 @@ class _DashboardHomeState extends State<DashboardHome> {
           child: child,
         );
       },
-      child: _showBookDeconstruction
-          ? BookDeconstructionScreen(
-              key: const ValueKey('book-deconstruction-screen'),
-              today: _state.today,
-              currentProject: _currentBookDeconstructionProject,
-              projects: _bookDeconstructionProjects,
-              onBack: _closeBookBreakdown,
+      child: _activeNovel != null
+          ? ProjectOverviewScreen(
+              key: const ValueKey('project-overview-screen'),
+              novel: _activeNovel!,
+              assistantModels: _assistantModels,
+              aiSettings: widget.aiSettings,
+              onBack: _closeProject,
               onToggleTheme: widget.onToggleTheme,
+              loadChapters: widget.repository.loadNovelChapters,
+              saveChapter: widget.repository.saveNovelChapter,
+              deleteChapter: widget.repository.deleteNovelChapter,
+              loadVolumes: widget.repository.loadNovelVolumes,
+              createVolume: widget.repository.createNovelVolume,
+              loadOutlines: widget.repository.loadNovelOutlines,
+              saveOutline: widget.repository.saveNovelOutline,
+              deleteOutline: widget.repository.deleteNovelOutline,
+              loadCharacters: widget.repository.loadNovelCharacters,
+              saveCharacter: widget.repository.saveNovelCharacter,
+              deleteCharacter: widget.repository.deleteNovelCharacter,
+              loadForeshadowings: widget.repository.loadNovelForeshadowings,
+              saveForeshadowing: widget.repository.saveNovelForeshadowing,
+              deleteForeshadowing: widget.repository.deleteNovelForeshadowing,
+              recordRecentChapter: widget.repository.recordRecentChapter,
               onOpenSettings: _openSettings,
-              onImportNovel: _importNovelForBookDeconstruction,
-              onCreateProject: _createBookDeconstructionProject,
-              onStartOrPause: _startOrPauseBookDeconstruction,
-              onSelectProject: _selectBookDeconstructionProject,
-              onOpenProjectFolder: _openBookDeconstructionProjectFolder,
-              onOpenProjectReport: _openBookDeconstructionReport,
-              onDeleteProject: _deleteBookDeconstructionProject,
-              onOpenExperimentalWriting: _openBookExperimentalWriting,
             )
-          : DashboardScreen(
-              key: const ValueKey('dashboard-screen'),
-              state: _state,
-              actions: DashboardActions(
-                createNovel: _createNovel,
-                importNovel: _importNovel,
-                openProject: _openProject,
-                toggleTheme: widget.onToggleTheme,
-                openSettings: _openSettings,
-                openBookBreakdown: _openBookBreakdown,
-              ),
-              searchController: _searchController,
-              onSearchChanged: (_) => _loadDashboard(showLoading: false),
-            ),
+          : _showBookDeconstruction
+              ? BookDeconstructionScreen(
+                  key: const ValueKey('book-deconstruction-screen'),
+                  today: _state.today,
+                  currentProject: _currentBookDeconstructionProject,
+                  projects: _bookDeconstructionProjects,
+                  onBack: _closeBookBreakdown,
+                  onToggleTheme: widget.onToggleTheme,
+                  onOpenSettings: _openSettings,
+                  onImportNovel: _importNovelForBookDeconstruction,
+                  onCreateProject: _createBookDeconstructionProject,
+                  onStartOrPause: _startOrPauseBookDeconstruction,
+                  onSelectProject: _selectBookDeconstructionProject,
+                  onOpenProjectFolder: _openBookDeconstructionProjectFolder,
+                  onOpenProjectReport: _openBookDeconstructionReport,
+                  onDeleteProject: _deleteBookDeconstructionProject,
+                  onOpenExperimentalWriting: _openBookExperimentalWriting,
+                )
+              : DashboardScreen(
+                  key: const ValueKey('dashboard-screen'),
+                  state: _state,
+                  actions: DashboardActions(
+                    createNovel: _createNovel,
+                    importNovel: _importNovel,
+                    openProject: _openProject,
+                    toggleTheme: widget.onToggleTheme,
+                    editProject: _editProject,
+                    updateProjectStatus: _updateProjectStatus,
+                    deleteProject: _deleteProject,
+                    openSettings: _openSettings,
+                    openBookBreakdown: _openBookBreakdown,
+                  ),
+                  searchController: _searchController,
+                  onSearchChanged: (_) => _loadDashboard(showLoading: false),
+                ),
     );
 
     if (_error == null) {
@@ -443,7 +474,7 @@ class _DashboardHomeState extends State<DashboardHome> {
       return;
     }
 
-    await widget.repository.createNovel(
+    final novelId = await widget.repository.createNovel(
       title: draft.title,
       summary: draft.summary,
       category: draft.category,
@@ -453,6 +484,64 @@ class _DashboardHomeState extends State<DashboardHome> {
     );
     _searchController.clear();
     await _loadDashboard();
+    _openProjectById(novelId);
+  }
+
+  Future<void> _editProject(NovelSummary novel) async {
+    final draft = await showEditNovelDialog(context, novel);
+    if (draft == null) {
+      return;
+    }
+
+    await widget.repository.updateNovel(
+      novelId: novel.id,
+      title: draft.title,
+      summary: draft.summary,
+      category: draft.category,
+      workType: draft.workType,
+      tags: draft.tags,
+      coverPath: draft.coverPath,
+    );
+    await _loadDashboard(showLoading: false);
+  }
+
+  Future<void> _updateProjectStatus(NovelSummary novel, String status) async {
+    await widget.repository.updateNovelStatus(
+      novelId: novel.id,
+      status: status,
+    );
+    await _loadDashboard(showLoading: false);
+  }
+
+  Future<void> _deleteProject(NovelSummary novel) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('删除作品'),
+          content: Text('确定删除《${novel.title}》吗？此操作不可撤销。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+
+    await widget.repository.deleteNovel(novel.id);
+    if (_activeNovel?.id == novel.id) {
+      _activeNovel = null;
+    }
+    await _loadDashboard(showLoading: false);
   }
 
   Future<void> _importNovel() async {
@@ -1020,28 +1109,68 @@ class _DashboardHomeState extends State<DashboardHome> {
   }
 
   void _openProject(NovelSummary novel) {
-    if (!widget.aiSettings.isReady) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.text('aiProvider.requiredToStart')),
-        ),
-      );
+    setState(() {
+      _showBookDeconstruction = false;
+      _activeNovel = novel;
+    });
+    unawaited(_rememberOpenedProject(novel.id));
+  }
+
+  Future<void> _rememberOpenedProject(int novelId) async {
+    try {
+      await widget.repository.recordRecentNovel(novelId);
+    } catch (_) {
       return;
     }
-
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) => ProjectDetailPage(novel: novel),
-      ),
-    );
+    if (!mounted) {
+      return;
+    }
+    await _loadDashboard(showLoading: false);
   }
 
   void _openBookBreakdown() {
-    setState(() => _showBookDeconstruction = true);
+    setState(() {
+      _activeNovel = null;
+      _showBookDeconstruction = true;
+    });
   }
 
   void _closeBookBreakdown() {
     setState(() => _showBookDeconstruction = false);
+  }
+
+  void _closeProject() {
+    setState(() => _activeNovel = null);
+  }
+
+  void _openProjectById(int novelId) {
+    for (final novel in _state.novels) {
+      if (novel.id == novelId) {
+        _openProject(novel);
+        return;
+      }
+    }
+  }
+
+  NovelSummary? _updatedActiveNovel(DashboardViewState state) {
+    final active = _activeNovel;
+    if (active == null) {
+      return null;
+    }
+    for (final novel in state.novels) {
+      if (novel.id == active.id) {
+        return novel;
+      }
+    }
+    return null;
+  }
+
+  List<String> get _assistantModels {
+    final models = widget.aiSettings.activeModels;
+    if (models.isNotEmpty) {
+      return models;
+    }
+    return const ['deepseek-v4-flash', 'kimi-k2.6'];
   }
 
   void _openSettings({bool showAgents = false}) {

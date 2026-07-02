@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../app/app_localizations.dart';
 import '../app/app_theme.dart';
+import 'dashboard_models.dart';
 import '../widgets/app_select_field.dart';
 
 const novelCategories = [
@@ -75,8 +76,20 @@ Future<NewNovelDraft?> showNewNovelDialog(BuildContext context) {
   );
 }
 
+Future<NewNovelDraft?> showEditNovelDialog(
+  BuildContext context,
+  NovelSummary novel,
+) {
+  return showDialog<NewNovelDraft>(
+    context: context,
+    builder: (context) => _NewNovelDialog(novel: novel),
+  );
+}
+
 class _NewNovelDialog extends StatefulWidget {
-  const _NewNovelDialog();
+  const _NewNovelDialog({this.novel});
+
+  final NovelSummary? novel;
 
   @override
   State<_NewNovelDialog> createState() => _NewNovelDialogState();
@@ -94,6 +107,31 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
   String _workType = novelWorkTypes.first;
   String? _coverPath;
   bool _isAddingTag = false;
+
+  bool get _isEditing => widget.novel != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final novel = widget.novel;
+    if (novel == null) {
+      return;
+    }
+    _titleController.text = novel.title;
+    _summaryController.text = novel.summary;
+    _category = _initialOption(
+      novel.category,
+      novelCategories,
+      _customCategoryController,
+    );
+    _workType = _initialOption(
+      novel.workType,
+      novelWorkTypes,
+      _customWorkTypeController,
+    );
+    _tags.addAll(novel.tags);
+    _coverPath = novel.coverPath;
+  }
 
   @override
   void dispose() {
@@ -123,7 +161,9 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  l10n.text('newNovel.title'),
+                  l10n.text(
+                    _isEditing ? 'newNovel.editTitle' : 'newNovel.title',
+                  ),
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         color: colors.text,
                         fontWeight: FontWeight.w800,
@@ -170,6 +210,12 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
                               _CoverPicker(
                                 coverPath: _coverPath,
                                 onPick: _pickCover,
+                                onRemove: _isEditing && _coverPath != null
+                                    ? () => setState(() => _coverPath = null)
+                                    : null,
+                                buttonLabel: l10n.text(_isEditing
+                                    ? 'newNovel.changeCover'
+                                    : 'newNovel.chooseCover'),
                               ),
                               const SizedBox(height: 18),
                               form,
@@ -185,6 +231,12 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
                               child: _CoverPicker(
                                 coverPath: _coverPath,
                                 onPick: _pickCover,
+                                onRemove: _isEditing && _coverPath != null
+                                    ? () => setState(() => _coverPath = null)
+                                    : null,
+                                buttonLabel: l10n.text(_isEditing
+                                    ? 'newNovel.changeCover'
+                                    : 'newNovel.chooseCover'),
                               ),
                             ),
                             const SizedBox(width: 18),
@@ -208,7 +260,9 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
                     const SizedBox(width: 10),
                     FilledButton(
                       onPressed: _submit,
-                      child: Text(l10n.text('action.create')),
+                      child: Text(
+                        l10n.text(_isEditing ? 'action.save' : 'action.create'),
+                      ),
                     ),
                   ],
                 ),
@@ -236,8 +290,16 @@ class _NewNovelDialogState extends State<_NewNovelDialog> {
     Navigator.of(context).pop(NewNovelDraft(
       title: _titleController.text.trim(),
       summary: _summaryController.text.trim(),
-      category: _selectedValue(_category, _customCategoryController),
-      workType: _selectedValue(_workType, _customWorkTypeController),
+      category: _selectedValue(
+        _category,
+        _customCategoryController,
+        novelCategories.last,
+      ),
+      workType: _selectedValue(
+        _workType,
+        _customWorkTypeController,
+        novelWorkTypes.last,
+      ),
       tags: List.unmodifiable(_tags),
       coverPath: _coverPath,
     ));
@@ -259,10 +321,14 @@ class _CoverPicker extends StatelessWidget {
   const _CoverPicker({
     required this.coverPath,
     required this.onPick,
+    required this.buttonLabel,
+    this.onRemove,
   });
 
   final String? coverPath;
   final VoidCallback onPick;
+  final VoidCallback? onRemove;
+  final String buttonLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -296,8 +362,16 @@ class _CoverPicker extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: onPick,
           icon: const Icon(Icons.image_outlined, size: 18),
-          label: Text(l10n.text('newNovel.chooseCover')),
+          label: Text(buttonLabel),
         ),
+        if (onRemove != null) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: onRemove,
+            icon: const Icon(Icons.close, size: 18),
+            label: Text(l10n.text('newNovel.removeCover')),
+          ),
+        ],
       ],
     );
   }
@@ -383,7 +457,7 @@ class _NovelForm extends StatelessWidget {
             onChanged: onCategoryChanged,
           ),
         ),
-        if (category == '自定义新增') ...[
+        if (category == novelCategories.last) ...[
           const SizedBox(height: 10),
           _LabeledControl(
             label: l10n.text('newNovel.customCategory'),
@@ -393,7 +467,7 @@ class _NovelForm extends StatelessWidget {
                 hintText: l10n.text('newNovel.customCategoryHint'),
               ),
               validator: (value) {
-                if (category == '自定义新增' &&
+                if (category == novelCategories.last &&
                     (value == null || value.trim().isEmpty)) {
                   return l10n.text('newNovel.customCategoryRequired');
                 }
@@ -416,7 +490,7 @@ class _NovelForm extends StatelessWidget {
             onChanged: onWorkTypeChanged,
           ),
         ),
-        if (workType == '自定义新增') ...[
+        if (workType == novelWorkTypes.last) ...[
           const SizedBox(height: 10),
           _LabeledControl(
             label: l10n.text('newNovel.customWorkType'),
@@ -426,7 +500,7 @@ class _NovelForm extends StatelessWidget {
                 hintText: l10n.text('newNovel.customWorkTypeHint'),
               ),
               validator: (value) {
-                if (workType == '自定义新增' &&
+                if (workType == novelWorkTypes.last &&
                     (value == null || value.trim().isEmpty)) {
                   return l10n.text('newNovel.customWorkTypeRequired');
                 }
@@ -560,12 +634,27 @@ class _LabeledControl extends StatelessWidget {
   }
 }
 
+String _initialOption(
+  String value,
+  List<String> options,
+  TextEditingController customController,
+) {
+  if (value.isEmpty || options.contains(value)) {
+    return value.isEmpty ? options.first : value;
+  }
+  customController.text = value;
+  return options.last;
+}
+
 String _selectedValue(
-    String? selected, TextEditingController customController) {
+  String? selected,
+  TextEditingController customController,
+  String customOption,
+) {
   if (selected == null) {
     return '';
   }
-  if (selected != '自定义新增') {
+  if (selected != customOption) {
     return selected;
   }
   return customController.text.trim();
